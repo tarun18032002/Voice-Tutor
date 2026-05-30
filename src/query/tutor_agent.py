@@ -2,9 +2,10 @@ import logging
 
 from livekit.agents import JobContext
 from livekit.agents.voice import Agent, AgentSession
-from livekit.plugins import openai, sarvam
+from livekit.plugins import openai, sarvam,silero
+from livekit.agents import stt
 
-from .retriever import search_rag
+from .retriever import QueryService
 
 
 
@@ -21,25 +22,40 @@ class VoiceAgent(Agent):
             Keep answers short and conversational.
             """,
 
-            stt=sarvam.STT(
-                language="unknown",
-                model="saaras:v3",
-                mode="transcribe",
-                flush_signal=True,
-            ),
+            # stt=sarvam.STT(
+            #     language="unknown",
+            #     model="saaras:v3",
+            #     mode="transcribe",
+            #     flush_signal=True,
+            # ),
+            stt = stt.StreamAdapter(
+                    stt=openai.STT(),
+                    vad=silero.VAD.load()
+                ),
 
-            llm=openai.LLM(model="gpt-4o"),
+            llm=openai.LLM(model="gpt-4o-mini",max_tokens=250),
 
-            tts=sarvam.TTS(
-                target_language_code="en-IN",
-                model="bulbul:v3",
-                speaker="shubh",
-            ),
+            # tts=sarvam.TTS(
+            #     target_language_code="en-IN",
+            #     model="bulbul:v3",
+            #     speaker="shubh",
+            # ),
+            tts = openai.TTS(model="gpt-4o-mini-tts"),
+            
         )
 
     async def on_user_turn_completed(self, turn_ctx, new_message):
         user_query = new_message.text_content
-        rag_context = search_rag(user_query)
+        logger.info(f"User query: {user_query}")
+        query_service = QueryService()
+        results = query_service.search(user_query)
+        logger.info(f"RAG context: {results}")
+
+        rag_context = "\n\n".join([
+                result.payload["text"]
+                for result in results
+            ])
+
 
         turn_ctx.add_message(
             role="system",

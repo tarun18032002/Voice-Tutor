@@ -38,7 +38,7 @@ class HierarchicalParentChildChunker:
     def create_chunks(self, document_data: dict):
 
         markdown_content = document_data["content"]
-
+        print(f"Document length: {len(markdown_content)} characters and data in document_data: {markdown_content[:500]}...")  # Print first 500 characters for verification
         sections = self._extract_sections(
             markdown_content
         )

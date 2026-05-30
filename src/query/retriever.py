@@ -1,16 +1,34 @@
+import os
+from openai import OpenAI
+from qdrant_client import QdrantClient
 
 
+class QueryService:
 
-def search_rag(user_query:str) -> str:
-    """
-    This is a placeholder function for the RAG search.
-    In a real implementation, this would query a vector database or search engine
-    to retrieve relevant context based on the user query.
+    def __init__(self):
+        self.openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY")
+        )
 
-    For demonstration purposes, it returns a static string.
-    """
-    return """Here is some relevant context retrieved for your query:
-- Context Point 1: Explanation about the topic
-- Context Point 2: Additional details and information
-- Context Point 3: Examples and use cases
-Use this context to answer the user's question effectively."""
+        self.qdrant_client = QdrantClient(
+            url=os.getenv("VECTOR_STORE_HOST"),
+            api_key=os.getenv("VECTOR_STORE_API_KEY")
+        )
+
+        self.collection_name = "documents"
+
+    def search(self, query: str, limit: int = 5):
+        embedding_response = self.openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=query
+        )
+
+        query_vector = embedding_response.data[0].embedding
+
+        results = self.qdrant_client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            limit=limit
+        )
+
+        return results.points
