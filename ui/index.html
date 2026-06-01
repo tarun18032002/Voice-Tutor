@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Tutor</title>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d1a;
+      --surface: #161628;
+      --surface2: #1e1e38;
+      --border: #2a2a4a;
+      --indigo: #6366f1;
+      --indigo-light: #818cf8;
+      --purple: #a855f7;
+      --blue: #3b82f6;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --radius: 16px;
+    }
+
+    html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
+
+    /* ── Layout ── */
+    #app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 24px; border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+    header h1 span { color: var(--indigo-light); }
+    #connection-status {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.8rem; color: var(--muted);
+    }
+    #status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
+    #status-dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    #status-dot.connecting { background: var(--amber); animation: pulse-dot 1s infinite; }
+    #status-dot.error { background: var(--red); }
+    @keyframes pulse-dot { 0%,100% { opacity:1 } 50% { opacity:0.3 } }
+
+    main { display: grid; grid-template-columns: 1fr 380px; overflow: hidden; }
+
+    /* ── Voice panel ── */
+    #voice-panel {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 32px; padding: 32px;
+    }
+
+    /* Orb */
+    #orb-wrapper { position: relative; width: 220px; height: 220px; }
+
+    .orb-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 1px solid transparent; animation: none;
+    }
+    .orb-ring-1 { background: transparent; border-color: rgba(99,102,241,0.15); }
+    .orb-ring-2 { inset: 12px; border-color: rgba(99,102,241,0.1); }
+
+    #orb {
+      position: absolute; inset: 24px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #6366f1, #4338ca 60%, #1e1b4b);
+      box-shadow: 0 0 40px rgba(99,102,241,0.3), inset 0 0 30px rgba(0,0,0,0.4);
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.4s ease;
+      cursor: default;
+    }
+
+    /* Bars inside orb (agent speaking) */
+    #orb-bars { display: none; gap: 5px; align-items: flex-end; height: 50px; }
+    #orb-bars .bar {
+      width: 7px; border-radius: 4px; background: white;
+      animation: bar-bounce 0.6s ease-in-out infinite;
+    }
+    #orb-bars .bar:nth-child(1) { height: 20px; animation-delay: 0s; }
+    #orb-bars .bar:nth-child(2) { height: 35px; animation-delay: 0.1s; }
+    #orb-bars .bar:nth-child(3) { height: 50px; animation-delay: 0.2s; }
+    #orb-bars .bar:nth-child(4) { height: 35px; animation-delay: 0.1s; }
+    #orb-bars .bar:nth-child(5) { height: 20px; animation-delay: 0s; }
+    @keyframes bar-bounce { 0%,100% { transform: scaleY(0.5) } 50% { transform: scaleY(1) } }
+
+    /* Spinner for thinking */
+    #orb-spinner {
+      display: none; width: 48px; height: 48px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: white;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg) } }
+
+    /* Mic icon for idle/listening */
+    #orb-icon { font-size: 2.5rem; user-select: none; }
+
+    /* Orb state animations */
+    #orb-wrapper.listening #orb {
+      box-shadow: 0 0 60px rgba(99,102,241,0.5), inset 0 0 30px rgba(0,0,0,0.4);
+      animation: orb-listen 2s ease-in-out infinite;
+    }
+    @keyframes orb-listen { 0%,100% { transform:scale(1) } 50% { transform:scale(1.04) } }
+
+    #orb-wrapper.user-speaking #orb {
+      background: radial-gradient(circle at 35% 35%, #3b82f6, #1d4ed8 60%, #0f172a);
+      box-shadow: 0 0 80px rgba(59,130,246,0.6), inset 0 0 30px rgba(0,0,0,0.4);
+      animation: orb-speak 0.3s ease-in-out infinite alternate;
+    }
+    @keyframes orb-speak { from { transform:scale(1) } to { transform:scale(1.06) } }
+
+    #orb-wrapper.thinking #orb {
+      background: radial-gradient(circle at 35% 35%, #a855f7, #7e22ce 60%, #1e1b4b);
+      box-shadow: 0 0 60px rgba(168,85,247,0.5), inset 0 0 30px rgba(0,0,0,0.4);
+    }
+
+    #orb-wrapper.agent-speaking #orb {
+      background: radial-gradient(circle at 35% 35%, #22c55e, #15803d 60%, #0f1f14);
+      box-shadow: 0 0 80px rgba(34,197,94,0.5), inset 0 0 30px rgba(0,0,0,0.4);
+    }
+    #orb-wrapper.agent-speaking #orb-bars { display: flex; }
+    #orb-wrapper.agent-speaking #orb-icon { display: none; }
+    #orb-wrapper.thinking #orb-spinner { display: block; }
+    #orb-wrapper.thinking #orb-icon { display: none; }
+
+    /* Ripple rings when user speaking */
+    #orb-wrapper.user-speaking .orb-ring-1 {
+      animation: ring-expand 1.5s ease-out infinite;
+      border-color: rgba(59,130,246,0.4);
+    }
+    #orb-wrapper.user-speaking .orb-ring-2 {
+      animation: ring-expand 1.5s 0.5s ease-out infinite;
+      border-color: rgba(59,130,246,0.2);
+    }
+    @keyframes ring-expand { 0% { transform:scale(1); opacity:1 } 100% { transform:scale(1.3); opacity:0 } }
+
+    #state-label {
+      font-size: 1rem; font-weight: 600; color: var(--muted);
+      letter-spacing: 0.05em; text-transform: uppercase; font-size: 0.75rem;
+      transition: color 0.3s;
+    }
+    #state-label.active { color: var(--indigo-light); }
+
+    /* Controls */
+    #controls { display: flex; gap: 12px; }
+    .btn {
+      padding: 12px 28px; border-radius: 12px; border: none; cursor: pointer;
+      font-size: 0.95rem; font-weight: 600; transition: all 0.2s;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--indigo); color: white; }
+    .btn-primary:hover:not(:disabled) { background: var(--indigo-light); transform: translateY(-1px); }
+    .btn-danger { background: var(--red); color: white; }
+    .btn-danger:hover:not(:disabled) { opacity: 0.85; }
+
+    #room-label { font-size: 0.78rem; color: var(--muted); text-align: center; }
+
+    /* ── Transcript panel ── */
+    #transcript-panel {
+      display: flex; flex-direction: column;
+      border-left: 1px solid var(--border); background: var(--surface);
+    }
+    #transcript-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      font-weight: 600; font-size: 0.9rem; color: var(--muted);
+      letter-spacing: 0.04em; text-transform: uppercase; font-size: 0.75rem;
+    }
+    #messages {
+      flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+      scroll-behavior: smooth;
+    }
+    #messages::-webkit-scrollbar { width: 4px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .msg { display: flex; flex-direction: column; gap: 4px; animation: fade-in 0.3s ease; max-width: 100%; }
+    @keyframes fade-in { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:none } }
+
+    .msg-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    .msg-bubble {
+      padding: 10px 14px; border-radius: 12px; font-size: 0.88rem;
+      line-height: 1.5; word-break: break-word;
+    }
+    .msg.user .msg-label { color: var(--blue); }
+    .msg.user .msg-bubble { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.2); }
+    .msg.agent .msg-label { color: var(--green); }
+    .msg.agent .msg-bubble { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.2); }
+    .msg.system .msg-label { color: var(--muted); }
+    .msg.system .msg-bubble { background: var(--surface2); color: var(--muted); font-style: italic; font-size: 0.8rem; }
+
+    #thinking-indicator { display: none; }
+    #thinking-indicator .msg-bubble { display: flex; gap: 5px; align-items: center; }
+    #thinking-indicator .dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+      animation: think-bounce 1s ease-in-out infinite;
+    }
+    #thinking-indicator .dot:nth-child(2) { animation-delay: 0.15s; }
+    #thinking-indicator .dot:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes think-bounce { 0%,100% { transform:translateY(0) } 50% { transform:translateY(-5px) } }
+
+    /* ── Footer (upload) ── */
+    footer {
+      border-top: 1px solid var(--border); background: var(--surface);
+      padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    }
+    #upload-label { font-size: 0.85rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+    #pdf-input { display: none; }
+    .btn-upload {
+      padding: 8px 18px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--text); cursor: pointer;
+      font-size: 0.85rem; font-weight: 500; transition: all 0.2s;
+    }
+    .btn-upload:hover { border-color: var(--indigo); color: var(--indigo-light); }
+    #selected-file { font-size: 0.8rem; color: var(--indigo-light); }
+    #upload-status {
+      font-size: 0.8rem; padding: 4px 10px; border-radius: 8px;
+      display: none;
+    }
+    #upload-status.success { background: rgba(34,197,94,0.15); color: var(--green); display: inline-block; }
+    #upload-status.error { background: rgba(239,68,68,0.15); color: var(--red); display: inline-block; }
+    #upload-status.loading { background: rgba(99,102,241,0.15); color: var(--indigo-light); display: inline-block; }
+    .btn-do-upload { margin-left: auto; }
+
+    /* Room input */
+    #room-input-wrap { display: flex; align-items: center; gap: 8px; }
+    #room-input-wrap label { font-size: 0.78rem; color: var(--muted); }
+    #room-input {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: 5px 10px; font-size: 0.8rem; width: 160px;
+    }
+    #room-input:focus { outline: none; border-color: var(--indigo); }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🎓 Voice <span>Tutor</span></h1>
+    <div id="connection-status">
+      <div id="status-dot"></div>
+      <span id="status-text">Not connected</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Voice panel -->
+    <div id="voice-panel">
+      <div id="orb-wrapper" class="">
+        <div class="orb-ring orb-ring-1"></div>
+        <div class="orb-ring orb-ring-2"></div>
+        <div id="orb">
+          <div id="orb-bars">
+            <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+            <div class="bar"></div><div class="bar"></div>
+          </div>
+          <div id="orb-spinner"></div>
+          <div id="orb-icon">🎙️</div>
+        </div>
+      </div>
+
+      <div id="state-label">Ready to start</div>
+
+      <div id="room-input-wrap">
+        <label for="room-input">Room:</label>
+        <input id="room-input" type="text" value="voice-tutor" spellcheck="false" />
+      </div>
+
+      <div id="controls">
+        <button class="btn btn-primary" id="connect-btn">Start Session</button>
+        <button class="btn btn-danger" id="disconnect-btn" disabled>End Session</button>
+      </div>
+    </div>
+
+    <!-- Transcript panel -->
+    <div id="transcript-panel">
+      <div id="transcript-header">💬 Conversation</div>
+      <div id="messages">
+        <div class="msg system">
+          <span class="msg-label">System</span>
+          <div class="msg-bubble">Start a session to begin talking with your AI tutor.</div>
+        </div>
+        <div class="msg agent" id="thinking-indicator">
+          <span class="msg-label">Tutor</span>
+          <div class="msg-bubble">
+            <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span id="upload-label">📚 Upload Study Material:</span>
+    <label class="btn-upload" for="pdf-input">Choose PDF…</label>
+    <input type="file" id="pdf-input" accept=".pdf" />
+    <span id="selected-file"></span>
+    <span id="upload-status"></span>
+    <button class="btn btn-primary btn-do-upload" id="upload-btn" disabled>Upload</button>
+  </footer>
+</div>
+
+<script>
+(function () {
+  const { Room, RoomEvent, Track } = window.LivekitClient;
+
+  // ── DOM refs ──────────────────────────────────────────
+  const orbWrapper   = document.getElementById('orb-wrapper');
+  const stateLabel   = document.getElementById('state-label');
+  const statusDot    = document.getElementById('status-dot');
+  const statusText   = document.getElementById('status-text');
+  const connectBtn   = document.getElementById('connect-btn');
+  const disconnectBtn= document.getElementById('disconnect-btn');
+  const messages     = document.getElementById('messages');
+  const thinkingEl   = document.getElementById('thinking-indicator');
+  const pdfInput     = document.getElementById('pdf-input');
+  const uploadBtn    = document.getElementById('upload-btn');
+  const selectedFile = document.getElementById('selected-file');
+  const uploadStatus = document.getElementById('upload-status');
+  const roomInput    = document.getElementById('room-input');
+
+  let room = null;
+
+  // ── State machine ─────────────────────────────────────
+  const STATES = {
+    idle:          { label: 'Ready to start',         orbClass: '',              dot: '' },
+    connecting:    { label: 'Connecting…',            orbClass: '',              dot: 'connecting' },
+    listening:     { label: 'Listening',              orbClass: 'listening',     dot: 'connected' },
+    userSpeaking:  { label: 'You are speaking',       orbClass: 'user-speaking', dot: 'connected' },
+    thinking:      { label: 'Tutor is thinking…',     orbClass: 'thinking',      dot: 'connected' },
+    agentSpeaking: { label: 'Tutor is speaking',      orbClass: 'agent-speaking',dot: 'connected' },
+    error:         { label: 'Connection error',       orbClass: '',              dot: 'error' },
+  };
+
+  function setState(key) {
+    const s = STATES[key] || STATES.idle;
+    orbWrapper.className = s.orbClass;
+    stateLabel.textContent = s.label;
+    stateLabel.className = s.orbClass ? 'active' : '';
+    statusDot.className = s.dot;
+    statusText.textContent = {
+      '': key === 'idle' ? 'Not connected' : '',
+      connecting: 'Connecting',
+      connected: 'Connected',
+      error: 'Error',
+    }[s.dot] ?? 'Connected';
+
+    // Show/hide thinking bubbles
+    thinkingEl.style.display = key === 'thinking' ? 'flex' : 'none';
+  }
+
+  setState('idle');
+
+  // ── Transcript helpers ────────────────────────────────
+  function addMessage(role, text) {
+    thinkingEl.style.display = 'none'; // hide thinking dots when real message arrives
+
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    const label = role === 'user' ? 'You' : role === 'agent' ? 'Tutor' : 'System';
+    div.innerHTML = `<span class="msg-label">${label}</span><div class="msg-bubble">${escHtml(text)}</div>`;
+
+    // Insert before the (hidden) thinking indicator
+    messages.insertBefore(div, thinkingEl);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── DataChannel message handler ───────────────────────
+  function handleData(data) {
+    let msg;
+    try { msg = JSON.parse(new TextDecoder().decode(data)); }
+    catch { return; }
+
+    if (msg.type === 'user_transcript' && msg.text) {
+      addMessage('user', msg.text);
+      setState('thinking');
+    } else if (msg.type === 'agent_thinking') {
+      setState('thinking');
+      thinkingEl.style.display = 'flex';
+      messages.scrollTop = messages.scrollHeight;
+    } else if (msg.type === 'agent_response' && msg.text) {
+      addMessage('agent', msg.text);
+      setState('agentSpeaking');
+    }
+  }
+
+  // ── Connect ───────────────────────────────────────────
+  connectBtn.addEventListener('click', async () => {
+    const roomName = roomInput.value.trim() || 'voice-tutor';
+    setState('connecting');
+    connectBtn.disabled = true;
+
+    let tokenData;
+    try {
+      const res = await fetch(`/api/token?room=${encodeURIComponent(roomName)}`);
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || 'Token error'); }
+      tokenData = await res.json();
+    } catch (err) {
+      setState('error');
+      addMessage('system', `Failed to get token: ${err.message}`);
+      connectBtn.disabled = false;
+      return;
+    }
+
+    room = new Room({ adaptiveStream: true, dynacast: true });
+
+    room.on(RoomEvent.Connected, async () => {
+      setState('listening');
+      disconnectBtn.disabled = false;
+      addMessage('system', `Connected to room "${tokenData.room}" as ${tokenData.identity}`);
+      try {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      } catch (e) {
+        addMessage('system', `Microphone error: ${e.message}`);
+      }
+    });
+
+    room.on(RoomEvent.Disconnected, () => {
+      setState('idle');
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      addMessage('system', 'Session ended.');
+      room = null;
+    });
+
+    room.on(RoomEvent.DataReceived, (data) => handleData(data));
+
+    room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      if (!room) return;
+      const localId = room.localParticipant.identity;
+      const userSpeaking = speakers.some(s => s.identity === localId);
+      const agentSpeaking = speakers.some(s => s.identity !== localId);
+
+      if (userSpeaking) setState('userSpeaking');
+      else if (agentSpeaking) setState('agentSpeaking');
+      else setState('listening');
+    });
+
+    // Attach remote audio tracks (agent TTS)
+    room.on(RoomEvent.TrackSubscribed, (track, _pub, _participant) => {
+      if (track.kind === Track.Kind.Audio) {
+        const el = track.attach();
+        el.style.display = 'none';
+        document.body.appendChild(el);
+      }
+    });
+
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach().forEach(el => el.remove());
+    });
+
+    try {
+      await room.connect(tokenData.url, tokenData.token);
+    } catch (err) {
+      setState('error');
+      addMessage('system', `Connection failed: ${err.message}`);
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      room = null;
+    }
+  });
+
+  // ── Disconnect ────────────────────────────────────────
+  disconnectBtn.addEventListener('click', async () => {
+    if (room) { await room.disconnect(); }
+  });
+
+  // ── Upload ────────────────────────────────────────────
+  pdfInput.addEventListener('change', () => {
+    const f = pdfInput.files[0];
+    if (f) {
+      selectedFile.textContent = f.name;
+      uploadBtn.disabled = false;
+    } else {
+      selectedFile.textContent = '';
+      uploadBtn.disabled = true;
+    }
+    uploadStatus.className = '';
+    uploadStatus.textContent = '';
+  });
+
+  uploadBtn.addEventListener('click', async () => {
+    const f = pdfInput.files[0];
+    if (!f) return;
+
+    uploadStatus.textContent = 'Uploading & ingesting…';
+    uploadStatus.className = 'loading';
+    uploadBtn.disabled = true;
+
+    const form = new FormData();
+    form.append('file', f);
+
+    try {
+      const res = await fetch('/api/ingest', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Ingestion failed');
+      uploadStatus.textContent = '✓ ' + data.message;
+      uploadStatus.className = 'success';
+      pdfInput.value = '';
+      selectedFile.textContent = '';
+    } catch (err) {
+      uploadStatus.textContent = '✗ ' + err.message;
+      uploadStatus.className = 'error';
+      uploadBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

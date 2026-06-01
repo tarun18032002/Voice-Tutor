@@ -1,12 +1,11 @@
 import logging
-from dotenv import load_dotenv
+
 
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents.voice import Agent, AgentSession
 from livekit.plugins import groq, sarvam
 
-# Load environment variables
-load_dotenv()
+
 
 # Set up logging
 logger = logging.getLogger("voice-agent")

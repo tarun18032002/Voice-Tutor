@@ -49,7 +49,7 @@ class VoiceAgent(Agent):
         logger.info(f"User query: {user_query}")
 
         # 📡 Send user transcript to browser
-        await self._broadcast(self.session.room, {
+        await self._broadcast(self.session.room_io.room, {
             "type": "user_transcript",
             "text": user_query,
         })
@@ -69,7 +69,7 @@ class VoiceAgent(Agent):
         )
 
         # 📡 Tell browser agent is thinking
-        await self._broadcast(self.session.room, {"type": "agent_thinking"})
+        await self._broadcast(self.session.room_io.room, {"type": "agent_thinking"})
 
     # ── Called when the agent finishes its reply ───────────────────────────
     async def on_agent_turn_completed(self, turn_ctx, new_message):
@@ -77,7 +77,7 @@ class VoiceAgent(Agent):
         logger.info(f"Agent reply: {agent_reply}")
 
         # 📡 Send agent reply text to browser
-        await self._broadcast(self.session.room, {
+        await self._broadcast(self.session.room_io.room, {
             "type": "agent_response",
             "text": agent_reply,
         })
