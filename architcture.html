@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Tutor Architecture Diagram</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#f1f5f9',
+                primaryTextColor: '#1e293b',
+                primaryBorderColor: '#cbd5e1',
+                lineColor: '#64748b',
+                secondaryColor: '#e2e8f0',
+                tertiaryColor: '#f8fafc'
+            },
+            flowchart: {
+                curve: 'basis',
+                nodeSpacing: 50,
+                rankSpacing: 50
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            overflow-x: auto;
+        }
+        /* Custom scrollbar for horizontal scrolling on small screens */
+        .mermaid::-webkit-scrollbar {
+            height: 8px;
+        }
+        .mermaid::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+            border-radius: 4px;
+        }
+        .mermaid::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8 flex flex-col items-center">
+
+    <div class="max-w-6xl w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+        
+        <!-- Header Section -->
+        <div class="bg-slate-900 text-white p-6 md:p-8">
+            <h1 class="text-3xl font-bold tracking-tight mb-2">Ultra-Low Latency Multi-Agent RAG Architecture</h1>
+            <p class="text-slate-300 text-sm md:text-base max-w-3xl">
+                A system design blueprint for a real-time, interruptible AI voice tutor. This architecture separates the high-speed audio transport layer from the cognitive multi-agent reasoning layer.
+            </p>
+        </div>
+
+        <!-- Diagram Section -->
+        <div class="p-6 md:p-10 bg-slate-50 border-b border-slate-200">
+            <div class="mermaid">
+                %%{init: {'theme': 'base'}}%%
+                graph TD
+                    classDef default fill:#fff,stroke:#cbd5e1,stroke-width:1px,color:#1e293b,rx:8,ry:8;
+                    classDef client fill:#eff6ff,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a,rx:8,ry:8;
+                    classDef transport fill:#fdf4ff,stroke:#d946ef,stroke-width:2px,color:#701a75,rx:8,ry:8;
+                    classDef server fill:#f0fdf4,stroke:#22c55e,stroke-width:2px,color:#14532d,rx:8,ry:8;
+                    classDef brain fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#7c2d12,rx:8,ry:8;
+                    classDef db fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#0f172a,rx:100,ry:100;
+                    classDef user fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#fff,rx:100,ry:100;
+
+                    User((Student)):::user
+                    
+                    subgraph Phase1 [Phase 1: Client & Transport Layer]
+                        direction LR
+                        Mic[Microphone]:::client
+                        Spk[Speaker]:::client
+                        NoiseFilter[Edge Noise Cancellation<br/>WASM / Krisp]:::client
+                        RTC[WebRTC Gateway<br/>LiveKit / Daily.co]:::transport
+                    end
+
+                    User -- Speaks --> Mic
+                    Spk -- Plays Audio --> User
+                    Mic --> NoiseFilter
+                    NoiseFilter -- Clean Audio Stream --> RTC
+
+                    subgraph Phase2 [Phase 2: Voice Orchestration Server - Pipecat]
+                        direction TB
+                        VAD[Server-Side VAD &<br/>Interruption Manager]:::server
+                        STT[Deepgram STT<br/>Speech-to-Text]:::server
+                        TTS[Cartesia / ElevenLabs<br/>Text-to-Speech]:::server
+                    end
+
+                    RTC -- UDP Audio Packets --> VAD
+                    VAD -- Active Speech --> STT
+                    VAD -.->|Barge-in / Stop Signal!| TTS
+                    TTS -- Streamed Audio Chunks --> RTC
+                    RTC -- Audio Packets --> Spk
+
+                    subgraph Phase3 [Phase 3: Multi-Agent Engine - LangGraph]
+                        direction TB
+                        Router[Routing Agent<br/>The Manager]:::brain
+                        RAG[RAG Agent<br/>The Librarian]:::brain
+                        Pedagogy[Pedagogy Agent<br/>The Teacher]:::brain
+                        Mem[(Redis<br/>State/Memory)]:::db
+                        VDB[(Vector Database<br/>Qdrant/Pinecone)]:::db
+                    end
+
+                    STT -- Transcribed Text --> Router
+                    Router <-->|Reads/Writes History| Mem
+                    Router -- Routes query --> RAG
+                    RAG <-->|Vector Search| VDB
+                    RAG -- Passes found text chunks --> Pedagogy
+                    Router -- Direct fallback --> Pedagogy
+                    Pedagogy -- Token-by-Token Text --> TTS
+
+            </div>
+        </div>
+
+        <!-- Explanation Section -->
+        <div class="p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 bg-white">
+            
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <div class="w-4 h-4 rounded-full bg-blue-100 border-2 border-blue-500"></div>
+                    <h3 class="font-bold text-slate-800">1. Edge & Transport</h3>
+                </div>
+                <p class="text-sm text-slate-600 leading-relaxed">
+                    Background noise is filtered locally using WebAssembly. WebRTC establishes a persistent, low-latency UDP connection to stream audio instead of waiting for standard HTTP requests.
+                </p>
+            </div>
+
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <div class="w-4 h-4 rounded-full bg-green-100 border-2 border-green-500"></div>
+                    <h3 class="font-bold text-slate-800">2. Orchestration</h3>
+                </div>
+                <p class="text-sm text-slate-600 leading-relaxed">
+                    The Voice Activity Detector (VAD) monitors the stream. If the student interrupts, the VAD immediately sends a "Stop Signal" to the TTS buffer, silencing the AI instantly.
+                </p>
+            </div>
+
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <div class="w-4 h-4 rounded-full bg-orange-100 border-2 border-orange-500"></div>
+                    <h3 class="font-bold text-slate-800">3. Agent Logic</h3>
+                </div>
+                <p class="text-sm text-slate-600 leading-relaxed">
+                    LangGraph coordinates the "brain". The Router decides if the RAG agent needs to query the Vector DB. The Pedagogy Agent formats the facts into a conversational, Socratic response.
+                </p>
+            </div>
+
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <div class="w-4 h-4 rounded-full bg-green-100 border-2 border-green-500"></div>
+                    <h3 class="font-bold text-slate-800">4. Streaming Synthesis</h3>
+                </div>
+                <p class="text-sm text-slate-600 leading-relaxed">
+                    The Pedagogy LLM streams its text output. As soon as a few words are ready, the TTS synthesizes the audio and pushes it back through WebRTC before the LLM finishes thinking.
+                </p>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+</html>

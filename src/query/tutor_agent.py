@@ -1,141 +1,99 @@
-"""Tutor Agent — generates the final child-facing tutoring response."""
+import json
+import logging
 
-from __future__ import annotations
+from livekit.agents import JobContext
+from livekit.agents.voice import Agent, AgentSession
+from livekit.plugins import openai, silero
+from livekit.agents import stt
 
-import os
-from typing import Optional
-
-from openai import OpenAI
-
-from src.agents.schemas import (
-    StudentProfile,
-    KnowledgeAgentOutput,
-    TeachingStrategyOutput,
-    TutorResponse,
-)
+from .retriever import QueryService
 
 
-STRATEGY_INSTRUCTIONS = {
-    "socratic": (
-        "Use the Socratic method. Ask probing questions to guide the child toward "
-        "the answer themselves. NEVER state the answer directly."
-    ),
-    "story": (
-        "Wrap the concept in a short, engaging story or narrative that a child "
-        "of this age would enjoy. Make it vivid and relatable."
-    ),
-    "analogy": (
-        "Explain using a simple, everyday analogy the child will instantly recognise. "
-        "Make the abstract concrete."
-    ),
-    "hints": (
-        "Give progressive hints — start very subtle and increase specificity only if "
-        "the child asks for more help. Do NOT reveal the full answer."
-    ),
-    "quiz": (
-        "Turn this into a fun quiz moment. Ask one multiple-choice or open question, "
-        "then give encouraging feedback based on the child's answer."
-    ),
-}
+logger = logging.getLogger("sarvam-voice-agent")
+logger.setLevel(logging.INFO)
 
 
-class TutorAgent:
-    """
-    Generates tutoring responses for the student.
-    Does NOT give direct answers. Instead it guides the child through
-    the strategy chosen by the TeachingStrategyAgent.
-    """
+class VoiceAgent(Agent):
+    def __init__(self) -> None:
+        self.query_service = QueryService()
+        super().__init__(
+            instructions="""
+            You are a helpful, friendly voice assistant for children aged 8-14.
+            Use the RAG context when it is relevant.
+            Keep answers short, clear, and encouraging.
+            Use simple words. Add a fun fact when possible!
+            """,
 
-    def __init__(self, model: str = "gpt-4o") -> None:
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = model
-        self.name = "TutorAgent"
+            stt=stt.StreamAdapter(
+                stt=openai.STT(),
+                vad=silero.VAD.load()
+            ),
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+            llm=openai.LLM(model="gpt-4o-mini"),
 
-    def run(
-        self,
-        student_query: str,
-        student_profile: StudentProfile,
-        knowledge: Optional[KnowledgeAgentOutput],
-        strategy: Optional[TeachingStrategyOutput],
-        conversation_history: list[dict],
-    ) -> TutorResponse:
-        """Produce a child-facing tutoring message."""
-
-        system_prompt = self._build_system_prompt(student_profile, strategy)
-        messages = self._build_messages(student_query, knowledge, conversation_history)
-
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=1024,
-            messages=[{"role": "system", "content": system_prompt}] + messages,
+            tts=openai.TTS(model="gpt-4o-mini-tts"),
         )
 
-        return self._parse_response(response.choices[0].message.content, strategy)
+    # ── Broadcast helpers (send text to frontend via DataChannel) ──────────
+    async def _broadcast(self, room, payload: dict):
+        """Send JSON to all participants (including the browser frontend)."""
+        try:
+            data = json.dumps(payload).encode()
+            await room.local_participant.publish_data(data, reliable=True)
+        except Exception as e:
+            logger.warning(f"DataChannel broadcast failed: {e}")
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
+    # ── Called when the user finishes speaking ─────────────────────────────
+    async def on_user_turn_completed(self, turn_ctx, new_message):
+        user_query = new_message.text_content
+        logger.info(f"User query: {user_query}")
 
-    def _build_system_prompt(
-        self,
-        profile: StudentProfile,
-        strategy: Optional[TeachingStrategyOutput],
-    ) -> str:
-        strategy_name = strategy.strategy if strategy else "socratic"
-        strategy_instruction = STRATEGY_INSTRUCTIONS.get(
-            strategy_name, STRATEGY_INSTRUCTIONS["socratic"]
+        # 📡 Send user transcript to browser
+        await self._broadcast(self.session.room, {
+            "type": "user_transcript",
+            "text": user_query,
+        })
+
+        # RAG lookup
+        results = self.query_service.search(user_query)
+        logger.info(f"RAG context: {results}")
+
+        rag_context = "\n\n".join([
+            result.payload["text"]
+            for result in results
+        ])
+
+        turn_ctx.add_message(
+            role="system",
+            content=f"Use this RAG context to answer the user.\n\nRAG Context:\n{rag_context}",
         )
-        return (
-            f"You are a warm, encouraging AI tutor for a {profile.age}-year-old "
-            f"child in grade {profile.grade}.\n\n"
-            f"TEACHING STRATEGY: {strategy_instruction}\n\n"
-            "RULES:\n"
-            "- Speak at an age-appropriate level. Use simple words.\n"
-            "- Always be encouraging and patient.\n"
-            "- End every response with either a question or a short understanding check.\n"
-            "- NEVER give direct answers unprompted.\n"
+
+        # 📡 Tell browser agent is thinking
+        await self._broadcast(self.session.room, {"type": "agent_thinking"})
+
+    # ── Called when the agent finishes its reply ───────────────────────────
+    async def on_agent_turn_completed(self, turn_ctx, new_message):
+        agent_reply = new_message.text_content
+        logger.info(f"Agent reply: {agent_reply}")
+
+        # 📡 Send agent reply text to browser
+        await self._broadcast(self.session.room, {
+            "type": "agent_response",
+            "text": agent_reply,
+        })
+
+    async def on_enter(self):
+        self.session.generate_reply(
+            instructions="Greet the child warmly and ask what they would like to learn today."
         )
 
-    def _build_messages(
-        self,
-        student_query: str,
-        knowledge: Optional[KnowledgeAgentOutput],
-        history: list[dict],
-    ) -> list[dict]:
-        messages: list[dict] = list(history)
 
-        if knowledge and knowledge.raw_context.strip():
-            context_note = (
-                "[CONTEXT FOR TUTOR — do not quote verbatim, use to guide teaching]\n"
-                + knowledge.raw_context[:1200]
-            )
-            messages.append({"role": "user", "content": context_note})
-            messages.append({
-                "role": "assistant",
-                "content": "Understood. I'll use this context to guide my teaching.",
-            })
+async def entrypoint(ctx: JobContext):
+    logger.info(f"User connected to room: {ctx.room.name}")
 
-        messages.append({"role": "user", "content": student_query})
-        return messages
+    session = AgentSession()
 
-    def _parse_response(
-        self, raw_text: str, strategy: Optional[TeachingStrategyOutput]
-    ) -> TutorResponse:
-        lines = raw_text.strip().splitlines()
-        follow_up: Optional[str] = None
-
-        for line in reversed(lines):
-            line = line.strip()
-            if line.endswith("?"):
-                follow_up = line
-                break
-
-        return TutorResponse(
-            message=raw_text.strip(),
-            strategy_used=strategy.strategy if strategy else "socratic",
-            follow_up_question=follow_up,
-        )
+    await session.start(
+        agent=VoiceAgent(),
+        room=ctx.room,
+    )
