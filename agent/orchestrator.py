@@ -1,9 +1,9 @@
-from langchain.chat_models import init_chat_model
+import os
 from langchain_core.messages import SystemMessage, HumanMessage
-from openai import OpenAI
+
 
 from .models import OrchestratorConfig,TutorAgentState
-import os
+from .llm import LLM_Client
 
 
 
@@ -38,22 +38,22 @@ def _build_context(state:TutorAgentState)->str:
 def orchestrator_node(state: TutorAgentState) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
 
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable not set.")
-
-    print("OpenAI api key found.")
-
-    client = OpenAI(api_key=api_key)
-
-    response = client.responses.parse(
+    client = LLM_Client(api_key=api_key)
+    response = client.generate_response(
         model="gpt-5-mini",
         reasoning={"effort": "low"},
         input=[
-            {"role": "system", "content": _system_message},
-            {"role": "user", "content": _build_context(state)},
+            {"role": "system", "content":  _system_message},
+            {"role": "user", "content":  _build_context(state)},
         ],
         text_format=OrchestratorConfig,
     )
+    print(f"Orchestrator decision: {response}")
+    if response.route not in ["web", "answer"] or not response.reason:
+        raise ValueError("Invalid response from orchestrator node. Missing 'route' or 'reason'.")
+    elif response.route == "web":
+        return {"web": response.reason}
+    else:
+        return {"answer": response.reason}
 
-    return response.output_parsed.route
-
+    
