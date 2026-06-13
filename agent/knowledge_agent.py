@@ -54,13 +54,13 @@ class KnowledgeAgentNode:
 
     def __call__(self, state: TutorAgentState) -> dict:
         client = LLMClient(api_key=self._api_key)
-        response: KnowledgeAgentConfig = client.parse(
-            messages=[
+        response: KnowledgeAgentConfig = client.generate_response(
+            model='gpt-5.4-mini',
+            input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=KnowledgeAgentConfig,
-            reasoning_effort="medium",
+            text_format=KnowledgeAgentConfig
         )
 
         logger.info(

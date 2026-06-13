@@ -52,13 +52,13 @@ class TutorNode:
 
     def __call__(self, state: TutorAgentState) -> dict:
         client = LLMClient(api_key=self._api_key)
-        response: TutorConfig = client.parse(
-            messages=[
+        response: TutorConfig = client.generate_response(
+            input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=TutorConfig,
-            reasoning_effort="medium",
+            text_format=TutorConfig,
+            # reasoning_effort="medium",
         )
 
         logger.info("TutorNode: answer generated (%d chars).", len(response.answer))

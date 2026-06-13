@@ -58,17 +58,18 @@ class OrchestratorNode:
     """Stateless callable node for LangGraph."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or os.environ["OPENAI_API_KEY"]
+        self._api_key = api_key or os.getenv("OPENAI_API_KEY")
 
     # LangGraph calls nodes as callables: node(state) -> dict
     def __call__(self, state: TutorAgentState) -> dict:
         client = LLMClient(api_key=self._api_key)
-        response: OrchestratorConfig = client.parse(
-            messages=[
+        response: OrchestratorConfig = client.generate_response(
+            model='gpt-5.4-mini',
+            input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=OrchestratorConfig,
+            text_format=OrchestratorConfig,
         )
 
         logger.info("Orchestrator → route=%s | reason=%s", response.route, response.reason)

@@ -13,8 +13,13 @@ import sys
 
 from dotenv import load_dotenv
 
+# IMPORTANT: LiveKit plugins must be imported on the main thread
+from livekit.agents import Agent, AgentSession, WorkerOptions, cli, function_tool, RunContext
+from livekit.plugins import openai, silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
 # Load environment variables
-load_dotenv()
+load_dotenv(dotenv_path=".env.local")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,13 +57,12 @@ def ingestion_job(file_path: str = "test/chapter-1(10th std).pdf") -> None:
 def _run_graph(graph, query: str) -> str:
     from agent.models import TutorAgentState
 
-    initial_state = TutorAgentState(
-        StudentQuery=query
-    )
+    initial_state = TutorAgentState(StudentQuery=query)
 
     result: TutorAgentState = graph.invoke(initial_state)
+    print("result:", result)
 
-    answer = result.TutorAnswer or "I'm sorry, I couldn't generate an answer."
+    answer = result["TutorAnswer"] or "I'm sorry, I couldn't generate an answer."
 
     logger.info("Final answer generated.")
 
@@ -73,7 +77,6 @@ def cli_test(query: str) -> None:
     from agent.graph import get_tutor_graph
 
     graph = get_tutor_graph()
-
     answer = _run_graph(graph, query)
 
     print("\n" + "=" * 60)
@@ -84,51 +87,89 @@ def cli_test(query: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LiveKit Entrypoint
+# LiveKit Voice Entrypoint
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def entrypoint(job_ctx):
     """
-    LiveKit text sandbox entrypoint.
+    LiveKit voice agent entrypoint using LangGraph as the tutor brain.
     """
 
-    import asyncio
+    print("=" * 60)
+    print("ENTRYPOINT STARTED")
+    print("=" * 60)
 
-    from livekit import rtc
     from agent.graph import get_tutor_graph
 
     graph = get_tutor_graph()
 
-    # Connect to room
+    class LangGraphTutorAgent(Agent):
+        def __init__(self):
+            super().__init__(
+                instructions=(
+                    "You are a voice tutor agent. "
+                    "For every student question, call the answer_student_question tool. "
+                    "After the tool returns, speak the answer naturally and clearly. "
+                    "Do not answer from your own knowledge unless the tool fails."
+                )
+            )
+
+        @function_tool()
+        async def answer_student_question(
+            self,
+            context: RunContext,
+            question: str,
+        ) -> str:
+            """
+            Answer a student's question using the LangGraph multi-agent tutor system.
+
+            Args:
+                question: The student's full question.
+            """
+            logger.info("LangGraph question: %s", question)
+
+            try:
+                return _run_graph(graph, question)
+            except Exception:
+                logger.exception("LangGraph failed.")
+                return "Sorry, I had trouble generating the tutor answer."
+
     await job_ctx.connect()
 
     logger.info("Connected to room: %s", job_ctx.room.name)
+    print("CONNECTED TO VOICE ROOM")
 
-    # Create ChatManager
-    chat = rtc.ChatManager(job_ctx.room)
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        turn_detection=MultilingualModel(),
 
-    @chat.on("message_received")
-    async def on_message(msg: rtc.ChatMessage):
-        try:
-            query = msg.message.strip()
+        # OpenAI Speech-to-Text
+        stt=openai.STT(
+            model="gpt-4o-transcribe",
+        ),
 
-            logger.info("Received query: %s", query)
+        # OpenAI LLM used only to manage the voice agent/tool call
+        llm=openai.LLM(
+            model="gpt-4o-mini",
+        ),
 
-            answer = _run_graph(graph, query)
+        # OpenAI Text-to-Speech
+        tts=openai.TTS(
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+        ),
+    )
 
-            logger.info("Answer:\n%s", answer)
+    await session.start(
+        room=job_ctx.room,
+        agent=LangGraphTutorAgent(),
+    )
 
-            await chat.send_message(answer)
+    print("SESSION STARTED")
 
-        except Exception:
-            logger.exception("Error while processing query.")
-
-            await chat.send_message(
-                "Sorry, something went wrong while processing your question."
-            )
-
-    # Keep the agent alive
-    await asyncio.Event().wait()
+    await session.generate_reply(
+        instructions="Greet the student and ask what they want to learn today."
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -159,6 +200,7 @@ if __name__ == "__main__":
         "OPENAI_API_KEY",
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
         "TAVILY_API_KEY",
     ):
         status = "✓" if os.getenv(var) else "✗ MISSING"
@@ -171,10 +213,9 @@ if __name__ == "__main__":
         cli_test(args.query)
 
     else:
-        from livekit.agents import WorkerOptions, cli
-
         cli.run_app(
             WorkerOptions(
-                entrypoint_fnc=entrypoint
+                entrypoint_fnc=entrypoint,
+                agent_name="voice-tutor",
             )
         )
