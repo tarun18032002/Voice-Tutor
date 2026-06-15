@@ -12,6 +12,8 @@ import os
 import sys
 
 from dotenv import load_dotenv
+
+# Load environment variables
 load_dotenv()
 
 logging.basicConfig(
@@ -33,13 +35,13 @@ from livekit.plugins import silero
 def _run_graph(graph, query: str) -> str:
     from agent.models import TutorAgentState
 
-    initial_state = TutorAgentState(StudentQuery=query)
-    result = graph.invoke(initial_state)
+    initial_state = TutorAgentState(
+        StudentQuery=query
+    )
 
-    if isinstance(result, dict):
-        answer = result.get("TutorAnswer") or "I'm sorry, I couldn't generate an answer."
-    else:
-        answer = result.TutorAnswer or "I'm sorry, I couldn't generate an answer."
+    result: TutorAgentState = graph.invoke(initial_state)
+
+    answer = result.TutorAnswer or "I'm sorry, I couldn't generate an answer."
 
     logger.info("Graph finished. Answer length: %d chars", len(answer))
     return answer
@@ -182,20 +184,51 @@ def cli_test(query: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Ingestion
+# LiveKit Entrypoint
 # ──────────────────────────────────────────────────────────────────────────────
 
-def ingestion_job(file_path: str = "data/chapter-1(10th std).pdf") -> None:
-    from injestion.ingestion_pipeline import IngestionPipeline
+async def entrypoint(job_ctx):
+    """
+    LiveKit text sandbox entrypoint.
+    """
 
-    if not os.path.exists(file_path):
-        logger.error("File not found: %s", file_path)
-        sys.exit(1)
+    import asyncio
 
-    logger.info("Starting ingestion for: %s", file_path)
-    pipeline = IngestionPipeline()
-    pipeline.ingest(file_path)
-    logger.info("Ingestion completed.")
+    from livekit import rtc
+    from agent.graph import get_tutor_graph
+
+    graph = get_tutor_graph()
+
+    # Connect to room
+    await job_ctx.connect()
+
+    logger.info("Connected to room: %s", job_ctx.room.name)
+
+    # Create ChatManager
+    chat = rtc.ChatManager(job_ctx.room)
+
+    @chat.on("message_received")
+    async def on_message(msg: rtc.ChatMessage):
+        try:
+            query = msg.message.strip()
+
+            logger.info("Received query: %s", query)
+
+            answer = _run_graph(graph, query)
+
+            logger.info("Answer:\n%s", answer)
+
+            await chat.send_message(answer)
+
+        except Exception:
+            logger.exception("Error while processing query.")
+
+            await chat.send_message(
+                "Sorry, something went wrong while processing your question."
+            )
+
+    # Keep the agent alive
+    await asyncio.Event().wait()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -209,8 +242,13 @@ if __name__ == "__main__":
     parser.add_argument("--query", type=str, default="")
     args, unknown = parser.parse_known_args()
 
-    for var in ("OPENAI_API_KEY", "LIVEKIT_URL", "LIVEKIT_API_KEY",
-                "VECTOR_STORE_HOST", "VECTOR_STORE_API_KEY"):
+    # verify env vars
+    for var in (
+        "OPENAI_API_KEY",
+        "LIVEKIT_URL",
+        "LIVEKIT_API_KEY",
+        "TAVILY_API_KEY",
+    ):
         status = "✓" if os.getenv(var) else "✗ MISSING"
         print(f"{var} = {status}")
 
@@ -219,4 +257,10 @@ if __name__ == "__main__":
     elif args.query:
         cli_test(args.query)
     else:
-        cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+        from livekit.agents import WorkerOptions, cli
+
+        cli.run_app(
+            WorkerOptions(
+                entrypoint_fnc=entrypoint
+            )
+        )

@@ -73,12 +73,12 @@ class ComprehensionCheckerNode:
             }
 
         client = LLMClient(api_key=self._api_key)
-        response: ComprehensionConfig = client.parse(
-            messages=[
+        response: ComprehensionConfig = client.generate_response(
+            input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=ComprehensionConfig,
+            text_format=ComprehensionConfig,
         )
 
         logger.info(

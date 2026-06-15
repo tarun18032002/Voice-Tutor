@@ -1,40 +1,14 @@
-"""LLM Client for production-level inference and structured output."""
+from openai import OpenAI
+from dataclasses import dataclass
 
-import os
-import logging
-from typing import Optional, Type, TypeVar, Any
-from openai import OpenAI, RateLimitError, APIError
-from pydantic import BaseModel
-
-logger = logging.getLogger(__name__)
-T = TypeVar('T', bound=BaseModel)
-
-
+@dataclass
 class LLMClient:
     """
-    Production-grade wrapper around the OpenAI API for consistent interface.
-    
-    Supports structured outputs, batch processing, and error handling.
+    A wrapper around the OpenAI API to provide a consistent interface for generating responses.
     """
-    
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "gpt-4o-mini",
-        timeout: int = 30,
-    ) -> None:
-        """
-        Initialize LLM Client.
-        
-        Args:
-            api_key: OpenAI API key. If None, reads from OPENAI_API_KEY.
-            model: Model to use. Defaults to gpt-4o-mini.
-            timeout: Request timeout in seconds.
-            
-        Raises:
-            ValueError: If API key is not provided or found.
-        """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+    api_key: str
+
+    def __post_init__(self):
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set.")
         
@@ -173,33 +147,6 @@ class LLMClient:
         
         return results
     
-    def parse(
-        self,
-        messages: list[dict],
-        response_format: Optional[Type[T]] = None,
-        reasoning_effort: Optional[str] = None,
-        **kwargs,
-    ) -> Any:
-        """
-        Alias for generate_response with structured output.
-        Called by all agent nodes as client.parse(..., response_format=SomeModel).
-
-        Args:
-            messages: Chat messages list.
-            response_format: Pydantic model for structured output.
-            reasoning_effort: Ignored (kept for API compatibility).
-            **kwargs: Additional parameters passed to generate_response.
-
-        Returns:
-            Parsed Pydantic model instance.
-        """
-        # reasoning_effort is not a standard OpenAI chat param — drop it silently
-        return self.generate_response(
-            messages=messages,
-            text_format=response_format,
-            **kwargs,
-        )
-
     def change_model(self, model: str) -> None:
         """
         Change the default model.

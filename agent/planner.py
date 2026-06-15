@@ -67,12 +67,12 @@ class PlannerNode:
 
     def __call__(self, state: TutorAgentState) -> dict:
         client = LLMClient(api_key=self._api_key)
-        response: PlannerConfig = client.parse(
-            messages=[
+        response: PlannerConfig = client.generate_response(
+            input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=PlannerConfig,
+            text_format=PlannerConfig,
         )
 
         logger.info("PlannerNode: plan generated (%d chars).", len(response.plan))
