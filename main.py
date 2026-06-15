@@ -41,7 +41,7 @@ def _run_graph(graph, query: str) -> str:
 
     result: TutorAgentState = graph.invoke(initial_state)
 
-    answer = result.TutorAnswer or "I'm sorry, I couldn't generate an answer."
+    answer = result['TutorAnswer'] or "I'm sorry, I couldn't generate an answer."
 
     logger.info("Graph finished. Answer length: %d chars", len(answer))
     return answer

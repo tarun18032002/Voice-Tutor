@@ -61,8 +61,8 @@ class TutorNode:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
             ],
-            response_format=TutorConfig,
-            reasoning_effort="medium",
+            text_format=TutorConfig
+            # reasoning_effort="medium",
         )
 
         logger.info("TutorNode: answer generated (%d chars).", len(response.answer))
