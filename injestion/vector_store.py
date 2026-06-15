@@ -1,18 +1,20 @@
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
+from qdrant_client.models import (
+    PointStruct, VectorParams, Distance,
+    PayloadSchemaType
+)
 import uuid
 
 
 class VectorStoreManager:
 
-    def __init__(self, url: str, api_key: str, collection_name: str):
-        self.client = QdrantClient(
-            url=url,
-            api_key=api_key
-        )
+    VECTOR_SIZE = 1536  # text-embedding-3-small output dimension
 
+    def __init__(self, url: str, api_key: str, collection_name: str):
+        self.client = QdrantClient(url=url, api_key=api_key)
         self.collection_name = collection_name
         self._ensure_collection_exists()
+        self._ensure_payload_indexes()
 
     def _ensure_collection_exists(self):
         collections = self.client.get_collections().collections
@@ -22,26 +24,62 @@ class VectorStoreManager:
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
-                    size=1536,
+                    size=self.VECTOR_SIZE,
                     distance=Distance.COSINE
                 )
             )
 
-    def store_nodes(self, nodes):
-        points = []
-
-        for node in nodes:
-            points.append(
-                PointStruct(
-                    id=str(uuid.uuid4()),
-                    vector=node.embedding,
-                    payload={
-                        "text": node.text,
-                        "metadata": node.metadata
-                    }
+    def _ensure_payload_indexes(self):
+        """
+        Create keyword indexes on metadata.type and metadata.parent_id so
+        Qdrant can filter by them without a full scan (required by cloud tier).
+        Safe to call repeatedly — silently ignored if index already exists.
+        """
+        for field in ("metadata.type", "metadata.parent_id"):
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
                 )
-            )
+            except Exception:
+                pass  # index already exists — ignore
 
+    def store_nodes(self, nodes):
+        """Store embedded child nodes (each node must have a .embedding)."""
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=node.embedding,
+                payload={
+                    "text": node.text,
+                    "metadata": node.metadata
+                }
+            )
+            for node in nodes
+        ]
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=points
+        )
+
+    def store_parent_nodes(self, parent_nodes):
+        """
+        Persist parent chunks with a zero-vector so they can be retrieved
+        by metadata filter (parent_id + type == 'parent') without polluting
+        similarity search results.
+        """
+        points = [
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=[0.0] * self.VECTOR_SIZE,
+                payload={
+                    "text": node.text,
+                    "metadata": node.metadata,
+                }
+            )
+            for node in parent_nodes
+        ]
         self.client.upsert(
             collection_name=self.collection_name,
             points=points

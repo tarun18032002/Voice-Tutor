@@ -13,8 +13,8 @@ from __future__ import annotations
 import logging
 import os
 
-from .llm import LLMClient
-from .models import KnowledgeAgentConfig, TutorAgentState
+from agent.llm import LLMClient
+from agent.models import KnowledgeAgentConfig, TutorAgentState
 
 logger = logging.getLogger(__name__)
 

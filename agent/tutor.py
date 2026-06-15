@@ -13,25 +13,29 @@ from __future__ import annotations
 import logging
 import os
 
-from .llm import LLMClient
-from .models import TutorAgentState, TutorConfig
+from agent.llm import LLMClient
+from agent.models import TutorAgentState, TutorConfig
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a friendly, encouraging AI tutor.
+If TeachingMode is STORY:
+Explain through a short story.
 
-Your job is to answer the student's query by following the provided plan
-EXACTLY, step by step.
+If TeachingMode is ANALOGY:
+Use a real-world analogy.
 
-Rules
------
-1. Follow every step in the plan.
-2. Write in clear, simple language appropriate for a student.
-3. Use examples, analogies, or bullet points where helpful.
-4. If the plan cannot be fully satisfied by the available information,
-   say so explicitly rather than guessing.
-5. Do NOT include the plan text itself in your answer.
+If TeachingMode is HINT:
+Provide hints instead of directly revealing everything.
+
+If TeachingMode is STEP_BY_STEP:
+Explain in numbered steps.
+
+If TeachingMode is EXAMPLE:
+Teach through examples.
+
+If TeachingMode is SOCRATIC:
+Teach by asking guiding questions.
 """
 
 
@@ -58,7 +62,7 @@ class TutorNode:
                 {"role": "user", "content": _build_user_message(state)},
             ],
             response_format=TutorConfig,
-            reasoning_effort="medium",
+            reasoning_effort="low",
         )
 
         logger.info("TutorNode: answer generated (%d chars).", len(response.answer))

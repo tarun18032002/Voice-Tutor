@@ -173,6 +173,33 @@ class LLMClient:
         
         return results
     
+    def parse(
+        self,
+        messages: list[dict],
+        response_format: Optional[Type[T]] = None,
+        reasoning_effort: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
+        """
+        Alias for generate_response with structured output.
+        Called by all agent nodes as client.parse(..., response_format=SomeModel).
+
+        Args:
+            messages: Chat messages list.
+            response_format: Pydantic model for structured output.
+            reasoning_effort: Ignored (kept for API compatibility).
+            **kwargs: Additional parameters passed to generate_response.
+
+        Returns:
+            Parsed Pydantic model instance.
+        """
+        # reasoning_effort is not a standard OpenAI chat param — drop it silently
+        return self.generate_response(
+            messages=messages,
+            text_format=response_format,
+            **kwargs,
+        )
+
     def change_model(self, model: str) -> None:
         """
         Change the default model.

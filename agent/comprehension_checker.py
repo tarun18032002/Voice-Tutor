@@ -17,12 +17,12 @@ from __future__ import annotations
 import logging
 import os
 
-from .llm import LLMClient
-from .models import ComprehensionConfig, TutorAgentState
+from agent.llm import LLMClient
+from agent.models import ComprehensionConfig, TutorAgentState
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = int(os.getenv("COMPREHENSION_MAX_RETRIES", "2"))
+MAX_RETRIES = 0
 
 _SYSTEM_PROMPT = """\
 You are a comprehension quality checker for an AI tutoring system.

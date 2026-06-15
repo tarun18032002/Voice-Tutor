@@ -28,6 +28,8 @@ class TutorAgentState(BaseModel):
     # ── Routing / orchestration ────────────────────────────────────────────
     AgentAction: str = Field(default="", description="Last routing decision made by the orchestrator.")
     OrchestratorReason: str = Field(default="", description="Reason for the routing decision.")
+    
+    TeachingMode: str = Field(default="story")
 
     # ── Knowledge sources ─────────────────────────────────────────────────
     RetrievedInfo: str = Field(default="", description="Information from the RAG retriever.")

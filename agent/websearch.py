@@ -16,7 +16,7 @@ from typing import Any
 
 from tavily import TavilyClient
 
-from .models import TutorAgentState
+from agent.models import TutorAgentState
 
 logger = logging.getLogger(__name__)
 

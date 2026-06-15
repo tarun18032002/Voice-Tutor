@@ -14,8 +14,8 @@ from __future__ import annotations
 import logging
 import os
 
-from .llm import LLMClient
-from .models import OrchestratorConfig, TutorAgentState
+from agent.llm import LLMClient
+from agent.models import OrchestratorConfig, TutorAgentState
 
 logger = logging.getLogger(__name__)
 

@@ -15,13 +15,25 @@ from __future__ import annotations
 import logging
 import os
 
-from .llm import LLMClient
-from .models import PlannerConfig, TutorAgentState
+from agent.llm import LLMClient
+from agent.models import PlannerConfig, TutorAgentState
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a planner for an AI tutoring system.
+You decide HOW to teach.
+
+Possible modes:
+- story
+- analogy
+- example
+- hint
+- step_by_step
+
+Return only 1-3 short bullet points.
+
+Do NOT write the answer.
+Maximum 50 words.
 
 Your job is to produce a clear, structured answer-plan that the Tutor
 agent will follow step-by-step.
