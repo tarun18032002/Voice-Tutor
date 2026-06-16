@@ -30,7 +30,7 @@ class BaseRetriever(ABC):
 @dataclass
 class QdrantRetriever(BaseRetriever):
     url: str = field(default_factory=lambda: os.environ["QDRANT_URL"])
-    collection: str = field(default_factory=lambda: os.environ["QDRANT_COLLECTION"])
+    collection: str = field(default_factory=lambda: "documents")
     api_key: str = field(default_factory=lambda: os.getenv("QDRANT_API_KEY", ""))
     embed_model: str = field(default="text-embedding-3-small")
 
@@ -58,32 +58,25 @@ class QdrantRetriever(BaseRetriever):
         return response.data[0].embedding
 
     def retrieve(self, query: str, top_k: int = TOP_K) -> str:
+    
         vector = self._embed(query)
 
-        results = self._client.search(
+        results = self._client.query_points(
             collection_name=self.collection,
-            query_vector=vector,
+            query=vector,
             limit=top_k,
-        )
+        ).points
 
         docs = [
-            hit.payload.get("text", "")
+            hit.payload["text"]
             for hit in results
-            if hit.payload and hit.payload.get("text")
+            if hit.payload and "text" in hit.payload
         ]
 
         if not docs:
-            logger.warning("QdrantRetriever: no documents found for query.")
             return ""
 
-        combined = "\n\n---\n\n".join(docs)
-
-        logger.debug(
-            "QdrantRetriever: retrieved %d chunks.",
-            len(docs),
-        )
-
-        return combined
+        return "\n\n---\n\n".join(docs)
 
 
 # ── Node ──────────────────────────────────────────────────────────────────────

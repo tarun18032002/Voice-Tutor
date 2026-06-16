@@ -1,78 +1,62 @@
-"""
-main.py — Tutor Agent entry point.
-livekit-agents 1.6.0: Agent subclass with on_user_turn_completed override.
-"""
-
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
-import os
-import sys
-
 from dotenv import load_dotenv
 
-# Load environment variables
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
+from livekit.plugins import silero, openai
+
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger(__name__)
-
-from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
-from livekit.plugins import openai as lk_openai
-from livekit.plugins import silero
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("tutor-agent")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Graph runner (blocking — called via run_in_executor)
-# ──────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Graph Runner
+# -----------------------------------------------------------------------------
 
 def _run_graph(graph, query: str) -> str:
     from agent.models import TutorAgentState
 
-    initial_state = TutorAgentState(
+    state = TutorAgentState(
         StudentQuery=query
     )
 
-    result: TutorAgentState = graph.invoke(initial_state)
+    result = graph.invoke(state)
 
-    answer = result['TutorAnswer'] or "I'm sorry, I couldn't generate an answer."
+    answer = result["TutorAnswer"]
 
-    logger.info("Graph finished. Answer length: %d chars", len(answer))
+    if not answer:
+        answer = "I'm sorry, I couldn't generate an answer."
+
+    logger.info("Graph finished. Answer length=%d", len(answer))
+
     return answer
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Tutor Agent — subclass of Agent (correct 1.6.0 pattern)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
+# -----------------------------------------------------------------------------
+# Tutor Agent
+# -----------------------------------------------------------------------------
 
 class TutorAgent(Agent):
-    """
-    Overrides on_user_turn_completed to intercept STT transcript,
-    run the LangGraph tutor pipeline, and speak the answer via TTS.
-    """
 
-    def __init__(self, graph) -> None:
+    def __init__(self, graph):
         super().__init__(
             instructions=(
                 "You are a friendly AI tutor. "
-                "Listen to the student's question and answer clearly and helpfully."
+                "Explain concepts clearly and help students learn."
             )
         )
-        self._graph = graph
+
+        self.graph = graph
         self.processing = False
 
-    async def on_user_turn_completed(self, turn_ctx=None, new_message=None) -> str:
-        # Prevent overlapping requests
+    async def on_user_turn_completed(self, turn_ctx=None, new_message=None):
+
         if self.processing:
-            logger.info("Already processing another question. Ignoring new turn.")
+            logger.info("Already processing another request")
             return ""
 
         self.processing = True
@@ -83,184 +67,184 @@ class TutorAgent(Agent):
             if not query:
                 return (
                     "Sorry, I didn't catch that. "
-                    "Could you please repeat your question?"
+                    "Could you repeat your question?"
                 )
 
-            logger.info("Student said: %s", query)
+            logger.info("Student: %s", query)
 
             loop = asyncio.get_running_loop()
 
             answer = await loop.run_in_executor(
                 None,
                 _run_graph,
-                self._graph,
-                query,
+                self.graph,
+                query
             )
 
-            logger.info("Tutor answer ready (%d chars)", len(answer))
+            logger.info("Tutor answer ready")
 
-            return ""
+            return answer
 
         except Exception:
-            logger.exception("Error while processing student query.")
+            logger.exception("Error while generating answer")
+
             return (
-                "Sorry, something went wrong while generating the answer. "
-                "Please try again."
+                "Sorry, something went wrong while processing your question."
             )
 
         finally:
             self.processing = False
 
     @staticmethod
-    def _extract_query(new_message) -> str:
+    def _extract_query(new_message):
+
         if new_message is None:
             return ""
 
-        content = new_message
-        if hasattr(new_message, "content"):
-            content = new_message.content
+        content = getattr(new_message, "content", new_message)
 
         if isinstance(content, list):
             parts = []
+
             for item in content:
+
                 if isinstance(item, str):
                     parts.append(item)
+
                 elif hasattr(item, "text"):
                     parts.append(item.text)
+
                 elif hasattr(item, "content"):
                     parts.append(str(item.content))
 
             return " ".join(parts).strip()
 
-        return str(content).strip() if content else ""
+        return str(content).strip()
 
 
+# -----------------------------------------------------------------------------
+# LiveKit Entry Point
+# -----------------------------------------------------------------------------
 
+async def entrypoint(ctx: JobContext):
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LiveKit entrypoint
-# ──────────────────────────────────────────────────────────────────────────────
-
-async def entrypoint(ctx: JobContext) -> None:
     from agent.graph import get_tutor_graph
 
     graph = get_tutor_graph()
+
     await ctx.connect()
+
     logger.info("Connected to room: %s", ctx.room.name)
 
     session = AgentSession(
-        stt=lk_openai.STT(model="whisper-1"),
-        tts=lk_openai.TTS(model="tts-1", voice="alloy"),
-        vad=silero.VAD.load(),
+        vad=silero.VAD.load(
+            min_speech_duration=0.10,
+            min_silence_duration=0.35,
+            activation_threshold=0.50,
+            prefix_padding_duration=0.15,
+        ),
+
+        # OpenAI Speech-to-Text
+        stt=openai.STT(
+            model="gpt-4o-transcribe",
+        ),
+
+        # OpenAI Text-to-Speech
+        tts=openai.TTS(
+            model="gpt-4o-mini-tts",
+            voice="alloy",
+        ),
+
+        # llm=openai.LLM(
+        #     model="gpt-5.4-mini",
+        # ),
+
+        allow_interruptions=True,
+        min_interruption_duration=0.30,
+        min_interruption_words=2,
+        min_endpointing_delay=0.40,
+        max_endpointing_delay=3.0,
+        min_consecutive_speech_delay=0.0,
+        discard_audio_if_uninterruptible=True,
     )
+
+    agent = TutorAgent(graph)
+
+    _handled = set()
+
+    def _handle_final_transcript(user_text: str):
+
+        user_text = (user_text or "").strip()
+
+        if not user_text:
+            return
+
+        if user_text in _handled:
+            return
+
+        _handled.add(user_text)
+
+        if len(_handled) > 50:
+            _handled.clear()
+
+        logger.info("USER: %s", user_text)
+
+    def _on_user_input_transcribed(ev):
+
+        is_final = getattr(ev, "is_final", True)
+
+        user_text = (
+            getattr(ev, "transcript", "")
+            or getattr(ev, "text", "")
+        )
+
+        logger.info(
+            "[stt] transcribed | final=%s text=%r",
+            is_final,
+            user_text,
+        )
+
+        if is_final:
+            _handle_final_transcript(user_text)
+
+    def _on_speech_committed(ev):
+
+        user_text = (
+            getattr(ev, "transcript", "")
+            or getattr(ev, "text", "")
+            or str(ev)
+        )
+
+        logger.info("[stt] committed | text=%r", user_text)
+
+        _handle_final_transcript(user_text)
+
+    session.on(
+        "user_input_transcribed",
+        _on_user_input_transcribed
+    )
+
+    session.on(
+        "user_speech_committed",
+        _on_speech_committed
+    )
+
     await session.start(
         room=ctx.room,
-        agent=TutorAgent(graph),
-        
+        agent=agent
     )
 
-    # await session.generate_reply(
-    #     instructions="Greet the student warmly and ask what they'd like to learn today."
-    # )
-
     await asyncio.Event().wait()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CLI quick-test (text only)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def cli_test(query: str) -> None:
-    from agent.graph import get_tutor_graph
-
-    graph = get_tutor_graph()
-    answer = _run_graph(graph, query)
-
-    print("\n" + "=" * 60)
-    print("TUTOR ANSWER")
-    print("=" * 60)
-    print(answer)
-    print("=" * 60 + "\n")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# LiveKit Entrypoint
-# ──────────────────────────────────────────────────────────────────────────────
-
-async def entrypoint(job_ctx):
-    """
-    LiveKit text sandbox entrypoint.
-    """
-
-    import asyncio
-
-    from livekit import rtc
-    from agent.graph import get_tutor_graph
-
-    graph = get_tutor_graph()
-
-    # Connect to room
-    await job_ctx.connect()
-
-    logger.info("Connected to room: %s", job_ctx.room.name)
-
-    # Create ChatManager
-    chat = rtc.ChatManager(job_ctx.room)
-
-    @chat.on("message_received")
-    async def on_message(msg: rtc.ChatMessage):
-        try:
-            query = msg.message.strip()
-
-            logger.info("Received query: %s", query)
-
-            answer = _run_graph(graph, query)
-
-            logger.info("Answer:\n%s", answer)
-
-            await chat.send_message(answer)
-
-        except Exception:
-            logger.exception("Error while processing query.")
-
-            await chat.send_message(
-                "Sorry, something went wrong while processing your question."
-            )
-
-    # Keep the agent alive
-    await asyncio.Event().wait()
-
-
-# ──────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # Main
-# ──────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Tutor Agent")
-    parser.add_argument("--ingest", action="store_true")
-    parser.add_argument("--file", type=str, default="data/chapter-1(10th std).pdf")
-    parser.add_argument("--query", type=str, default="")
-    args, unknown = parser.parse_known_args()
 
-    # verify env vars
-    for var in (
-        "OPENAI_API_KEY",
-        "LIVEKIT_URL",
-        "LIVEKIT_API_KEY",
-        "TAVILY_API_KEY",
-    ):
-        status = "✓" if os.getenv(var) else "✗ MISSING"
-        print(f"{var} = {status}")
-
-    if args.ingest:
-        ingestion_job(args.file)
-    elif args.query:
-        cli_test(args.query)
-    else:
-        from livekit.agents import WorkerOptions, cli
-
-        cli.run_app(
-            WorkerOptions(
-                entrypoint_fnc=entrypoint
-            )
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint
         )
+    )
