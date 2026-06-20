@@ -8,7 +8,7 @@ dependencies = [
     "docling>=2.96.0",
     "fastapi>=0.136.3",
     "google-genai>=2.7.0",
-    "livekit-agents[openai,sarvam,silero]>=1.5.15",
+    "livekit-agents[langchain,openai,sarvam,silero]~=1.5",
     "livekit-api>=1.1.0",
     "livekit-plugins-openai>=1.5.15",
     "livekit-plugins-silero>=1.5.15",
@@ -25,4 +25,6 @@ dependencies = [
     "pydantic>=2.0.0",
     "chromadb>=1.5.9",
     "livekit-plugins-turn-detector>=1.6.0",
+    "livekit-plugins-ai-coustics>=0.3.0",
+    "langchain-core>=1.4.6",
 ]

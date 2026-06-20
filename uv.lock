@@ -2164,6 +2164,9 @@ codecs = [
 images = [
     { name = "pillow" },
 ]
+langchain = [
+    { name = "livekit-plugins-langchain" },
+]
 openai = [
     { name = "livekit-plugins-openai" },
 ]
@@ -2225,6 +2228,37 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/72/08/93ed14e757f3bb3d22c40e11900ea2815883b7beb331fe758c8d40ea1dd0/livekit_blingfire-1.1.0-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:20b95b2c15c4a1af4e68c1aa7d885bf295f89ee6eb5c1a1fdfa315a51795b30d", size = 170081, upload-time = "2025-12-16T00:48:31.268Z" },
     { url = "https://files.pythonhosted.org/packages/0f/6d/b2a23cafabf55561c463490b3a87e323640259ae340e6db26bb71e0fa26d/livekit_blingfire-1.1.0-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6c13ef26e5234674ac353b7cfaadeb23468e951eb07461b6b6c77f79cd5ff763", size = 176755, upload-time = "2025-12-16T00:48:32.294Z" },
     { url = "https://files.pythonhosted.org/packages/60/93/c00c175d2187160bdb2dac6b338203d51396307dfce23f03defb3b5e5572/livekit_blingfire-1.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:c91b2315e0497383384304d33554d70b8a63dec5ad96cd43437c67f4172077cf", size = 141072, upload-time = "2025-12-16T00:48:33.423Z" },
+]
+
+[[package]]
+name = "livekit-plugins-ai-coustics"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit" },
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/80/feed50c8495f2293db95a35d72aacef4ce1f2cd21113e093ac910ffa4395/livekit_plugins_ai_coustics-0.3.0.tar.gz", hash = "sha256:7019c9035aad8e015f58da6818381bbbc5f2c083ce44ab0303aee4911a866a82", size = 19089, upload-time = "2026-06-15T20:53:31.878Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/41/651d29485a2ba9e844b55d48959d97e309214942038c2042bcfa700e538d/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:4ac73a46722b59232bbb1d1db86d342bfa77fc74395d5b01d665d2aa6bb4980e", size = 70523160, upload-time = "2026-06-15T20:53:15.066Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/cd/ddd92898aa0f269b21b0aaf18f77ece9d8a8b00bcb2af47fd44eedf690bf/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4e50f2d03734d500cfe41a9fa11b74a94a5894b6869c41a7cef679c5b4b24efa", size = 70699868, upload-time = "2026-06-15T20:53:18.76Z" },
+    { url = "https://files.pythonhosted.org/packages/43/15/eb48d2e662a08667f4526d3181097f900b9088e78028d9742114d8b4d729/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d78a4e48d80c09b0a9e192115f850891813589cde8090d36b745bd4e3312bf3", size = 70398515, upload-time = "2026-06-15T20:53:22.37Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/c0/9ddfd240baccca55021a0cb2622968ae0b7041a570aed1b4ce792a6b0f29/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4e70be41a4988d9344516fb5f3f64d9cab369a93bd94135226f0c903863da150", size = 70742569, upload-time = "2026-06-15T20:53:25.877Z" },
+    { url = "https://files.pythonhosted.org/packages/13/da/12b27e79ac14f29e4f732b7c3a665604bf0e34830802d9658fa679ca04a5/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:3940b252fb8a278ea7455144629cbb8283f8927b99125327492efe6cde74c8fd", size = 70087927, upload-time = "2026-06-15T20:53:29.37Z" },
+]
+
+[[package]]
+name = "livekit-plugins-langchain"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langgraph" },
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/2e/3b36da9c87d5950668cf0ec32badfbab0fea0441accbb9eaa913d5566921/livekit_plugins_langchain-1.6.0.tar.gz", hash = "sha256:470dd2618cca9e7422b7d2aa9939e271d735ae249beb9a260513c042e61d0480", size = 5598, upload-time = "2026-06-11T21:38:30.008Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/71/4334f476599b4c91ff8fd102f67fd94986dc047c446aec094cf15c156509/livekit_plugins_langchain-1.6.0-py3-none-any.whl", hash = "sha256:5d6a1d2ba478e4c9f520bfe161370b50d729fdbbfb704145ac85f44d42088e4e", size = 5885, upload-time = "2026-06-11T21:38:29.014Z" },
 ]
 
 [[package]]
@@ -6514,10 +6548,12 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-genai" },
     { name = "langchain" },
+    { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
-    { name = "livekit-agents", extra = ["openai", "sarvam", "silero"] },
+    { name = "livekit-agents", extra = ["langchain", "openai", "sarvam", "silero"] },
     { name = "livekit-api" },
+    { name = "livekit-plugins-ai-coustics" },
     { name = "livekit-plugins-openai" },
     { name = "livekit-plugins-silero" },
     { name = "livekit-plugins-turn-detector" },
@@ -6538,10 +6574,12 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "google-genai", specifier = ">=2.7.0" },
     { name = "langchain", specifier = ">=0.2.0" },
+    { name = "langchain-core", specifier = ">=1.4.6" },
     { name = "langchain-openai", specifier = ">=0.1.0" },
     { name = "langgraph", specifier = ">=0.0.59" },
-    { name = "livekit-agents", extras = ["openai", "sarvam", "silero"], specifier = ">=1.5.15" },
+    { name = "livekit-agents", extras = ["langchain", "openai", "sarvam", "silero"], specifier = "~=1.5" },
     { name = "livekit-api", specifier = ">=1.1.0" },
+    { name = "livekit-plugins-ai-coustics", specifier = ">=0.3.0" },
     { name = "livekit-plugins-openai", specifier = ">=1.5.15" },
     { name = "livekit-plugins-silero", specifier = ">=1.5.15" },
     { name = "livekit-plugins-turn-detector", specifier = ">=1.6.0" },

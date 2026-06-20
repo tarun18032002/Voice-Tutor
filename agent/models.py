@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from pydantic import BaseModel, Field
 import operator
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
 
 
 # ── LangGraph state ───────────────────────────────────────────────────────────
@@ -23,6 +25,7 @@ class TutorAgentState(BaseModel):
     """Full internal state threaded through every node."""
 
     # ── Input ──────────────────────────────────────────────────────────────
+    messages: Annotated[list[AnyMessage], add_messages] = Field(default_factory=list)
     StudentQuery: str = Field(default="", description="The query from the student.")
 
     # ── Routing / orchestration ────────────────────────────────────────────

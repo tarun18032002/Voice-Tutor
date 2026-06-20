@@ -31,7 +31,7 @@ import logging
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
-
+from agent.input_mapper import input_mapper_node
 from agent.knowledge_agent import knowledge_agent_node
 from agent.models import TutorAgentState, TutorInputState
 from agent.orchestrator import orchestrator_node
@@ -76,10 +76,11 @@ def build_tutor_graph() -> StateGraph:
 
     builder = StateGraph(
         TutorAgentState,
-        input_schema=TutorInputState,
+        # input_schema=TutorInputState,
     )
 
     # Register nodes
+    builder.add_node("input_mapper", input_mapper_node)
     builder.add_node("orchestrator", orchestrator_node)
     builder.add_node("retriever", retriever_node)
     builder.add_node("web", websearch_node)
@@ -88,7 +89,8 @@ def build_tutor_graph() -> StateGraph:
     builder.add_node("tutor", tutor_node)
 
     # Start
-    builder.add_edge(START, "orchestrator")
+    builder.add_edge(START, "input_mapper")
+    builder.add_edge("input_mapper", "orchestrator")
 
     # Orchestrator routing
     builder.add_conditional_edges(
@@ -113,20 +115,5 @@ def build_tutor_graph() -> StateGraph:
     return builder.compile()
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Singleton accessor
-# ──────────────────────────────────────────────────────────────────────────────
-
-_graph = None
 
 
-def get_tutor_graph() -> StateGraph:
-    """Return the compiled graph, building it once."""
-
-    global _graph
-
-    if _graph is None:
-        _graph = build_tutor_graph()
-        logger.info("Tutor graph compiled.")
-
-    return _graph

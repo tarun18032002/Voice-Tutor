@@ -15,6 +15,7 @@ import os
 
 from agent.llm import LLMClient
 from agent.models import TutorAgentState, TutorConfig
+from langchain_core.messages import AIMessage
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,11 @@ class TutorNode:
         if not response.answer:
             raise ValueError("TutorNode returned an empty answer.")
 
-        return {"TutorAnswer": response.answer}
+        # return {"TutorAnswer": response.answer}
+        return {
+                "TutorAnswer": response.answer,
+                "messages": [AIMessage(content=response.answer)],
+            }
 
 
 # ── Module-level function alias ───────────────────────────────────────────────
