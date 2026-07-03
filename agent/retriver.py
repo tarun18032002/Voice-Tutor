@@ -6,9 +6,11 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from langsmith import traceable
 
 from openai import OpenAI
 from qdrant_client import QdrantClient
+
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +41,6 @@ class QdrantRetriever(BaseRetriever):
             url=self.url,
             api_key=self.api_key or None,
         )
-
         self._openai = OpenAI(
             api_key=os.environ["OPENAI_API_KEY"],
         )
@@ -56,7 +57,8 @@ class QdrantRetriever(BaseRetriever):
         )
 
         return response.data[0].embedding
-
+    
+    @traceable(name="Qdrant Retrieval", run_type="retriever")
     def retrieve(self, query: str, top_k: int = TOP_K) -> str:
     
         vector = self._embed(query)
@@ -88,7 +90,7 @@ class RetrieverNode:
         self._retriever = QdrantRetriever()
 
     def __call__(self, state) -> dict:
-        retrieved = self._retriever.retrieve(state.StudentQuery)
+        retrieved = self._retriever.retrieve(state.query)
 
         return {
             "RetrievedInfo": retrieved,

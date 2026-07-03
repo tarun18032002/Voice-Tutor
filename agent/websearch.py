@@ -3,8 +3,9 @@ websearch.py
 ------------
 Web Search node powered by Tavily.
 
-Performs a targeted search for the student query and stores clean,
-concatenated result snippets in state.WebInfo.
+Runs only when the Orchestrator chooses SEARCH. It uses optimized search
+queries from the orchestrator when available; otherwise it falls back to the
+student query.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from langsmith import traceable
 from tavily import TavilyClient
 
 from agent.models import TutorAgentState
@@ -25,17 +27,6 @@ MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
 
 @dataclass
 class WebSearchTool:
-    """
-    Thin, typed wrapper around the Tavily Search API.
-
-    Parameters
-    ----------
-    api_key:
-        Tavily API key.  Falls back to the TAVILY_API_KEY env var.
-    max_results:
-        Number of search results to fetch per query.
-    """
-
     api_key: str = field(default_factory=lambda: os.environ["TAVILY_API_KEY"])
     max_results: int = MAX_RESULTS
 
@@ -44,15 +35,8 @@ class WebSearchTool:
             raise ValueError("TAVILY_API_KEY environment variable is not set.")
         self._client = TavilyClient(api_key=self.api_key)
 
+    @traceable(name="Tavily Web Search", run_type="tool")
     def search(self, query: str) -> str:
-        """
-        Execute a web search and return a clean text block.
-
-        Returns
-        -------
-        Concatenated snippet strings separated by ``---``.
-        Raises RuntimeError on Tavily failure.
-        """
         logger.info("WebSearchTool: searching for '%s'", query[:80])
         try:
             raw: dict[str, Any] = self._client.search(
@@ -66,7 +50,6 @@ class WebSearchTool:
 
         parts: list[str] = []
 
-        # Tavily may return a top-level summarised answer
         if raw.get("answer"):
             parts.append(f"Summary: {raw['answer']}")
 
@@ -77,9 +60,7 @@ class WebSearchTool:
             if content:
                 parts.append(f"[{title}]({url})\n{content}")
 
-        combined = "\n\n---\n\n".join(parts)
-        logger.debug("WebSearchTool: assembled %d chars of web content.", len(combined))
-        return combined
+        return "\n\n---\n\n".join(parts)
 
 
 class WebSearchNode:
@@ -88,12 +69,21 @@ class WebSearchNode:
     def __init__(self) -> None:
         self._tool = WebSearchTool()
 
-    def __call__(self, state: TutorAgentState) -> dict:
-        web_info = self._tool.search(state.StudentQuery)
-        return {"WebInfo": web_info}
+    def __call__(self, state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
+        if isinstance(state, dict):
+            queries = state.get("search_queries") or [state.get("query", "")]
+        else:
+            queries = state.search_queries or [state.query]
+
+        queries = [q for q in queries if q]
+        if not queries:
+            raise ValueError("WebSearchNode requires at least one query.")
+
+        results = [self._tool.search(query) for query in queries[:3]]
+        web_info = "\n\n=== NEXT SEARCH RESULT SET ===\n\n".join(r for r in results if r)
+
+        return {"WebSearch_info": web_info}
 
 
-# ── Module-level function alias ───────────────────────────────────────────────
-
-def websearch_node(state: TutorAgentState) -> dict:
+def websearch_node(state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
     return WebSearchNode()(state)

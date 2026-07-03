@@ -1,28 +1,19 @@
-
 """
 graph.py
 --------
-LangGraph graph assembly for the Tutor Agent.
+LangGraph graph assembly for the multi-agent Tutor Agent.
 
-Flow
-----
-User Query
-    │
-[orchestrator]
-    │
-┌────┴────┐
-│         │
-retriever web
-│         │
-└────┬────┘
-     │
-[knowledge_agent]
-     │
-[planner]
-     │
-[tutor]
-     │
-    END
+Architecture
+------------
+START
+  ├── retriever
+  └── planner
+        ↓
+  orchestrator
+    ├── SEARCH → websearch → tutor
+    └── ANSWER → tutor
+        ↓
+       END
 """
 
 from __future__ import annotations
@@ -31,9 +22,9 @@ import logging
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
-from agent.input_mapper import input_mapper_node
-from agent.knowledge_agent import knowledge_agent_node
-from agent.models import TutorAgentState, TutorInputState
+from langsmith import traceable
+
+from agent.models import InputTutorAgentState, TutorAgentState
 from agent.orchestrator import orchestrator_node
 from agent.planner import planner_node
 from agent.retriver import retriever_node
@@ -43,77 +34,89 @@ from agent.websearch import websearch_node
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Edge condition functions
-# ──────────────────────────────────────────────────────────────────────────────
+import inspect
+from langsmith import traceable
 
-def route_after_orchestrator(
-    state: TutorAgentState,
-) -> Literal["retriever", "web", "knowledge_agent"]:
-    """
-    Route based on the orchestrator's AgentAction.
-    """
-    action = state.AgentAction
 
-    if action == "retriever":
-        return "retriever"
+def traced_node(name: str, fn):
+    if inspect.iscoroutinefunction(fn):
+        @traceable(name=name, run_type="chain")
+        async def async_wrapper(state):
+            return await fn(state)
 
-    if action == "web":
+        return async_wrapper
+
+    @traceable(name=name, run_type="chain")
+    def sync_wrapper(state):
+        return fn(state)
+
+    return sync_wrapper
+
+
+def route_after_orchestrator(state: TutorAgentState) -> str:
+    action = state.orchestrator_action
+
+    if action == "SEARCH":
         return "web"
 
-    logger.debug("Orchestrator chose 'answer' – skipping retrieval.")
-    return "knowledge_agent"
+    if action == "ANSWER":
+        return "tutor"
+
+    raise ValueError(
+        f"Invalid orchestrator action. Expected 'SEARCH' or 'ANSWER', got {action!r}."
+    )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Graph builder
-# ──────────────────────────────────────────────────────────────────────────────
-
-def build_tutor_graph() -> StateGraph:
-    """
-    Assemble and compile the Tutor Agent LangGraph.
-    """
+def build_tutor_graph():
+    """Build and compile the tutor graph."""
 
     builder = StateGraph(
         TutorAgentState,
-        # input_schema=TutorInputState,
+        input_schema=InputTutorAgentState,
     )
 
-    # Register nodes
-    builder.add_node("input_mapper", input_mapper_node)
-    builder.add_node("orchestrator", orchestrator_node)
-    builder.add_node("retriever", retriever_node)
-    builder.add_node("web", websearch_node)
-    builder.add_node("knowledge_agent", knowledge_agent_node)
-    builder.add_node("planner", planner_node)
-    builder.add_node("tutor", tutor_node)
+    # Nodes
+    builder.add_node("retriever", traced_node("Retriever Agent", retriever_node))
+    builder.add_node("planner", traced_node("Planner Agent", planner_node))
+    builder.add_node("orchestrator", traced_node("Orchestrator Agent", orchestrator_node))
+    builder.add_node("web", traced_node("Web Search Agent", websearch_node))
+    builder.add_node("tutor", traced_node("Tutor Agent", tutor_node))
 
-    # Start
-    builder.add_edge(START, "input_mapper")
-    builder.add_edge("input_mapper", "orchestrator")
+    # Parallel fan-out: retrieval and pedagogical planning can happen together.
+    builder.add_edge(START, "retriever")
+    builder.add_edge(START, "planner")
 
-    # Orchestrator routing
+    # Fan-in: orchestrator runs only after retriever and planner are complete.
+    builder.add_edge("retriever", "orchestrator")
+
+    # Conditional route: either search the web or answer directly.
     builder.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,
         {
-            "retriever": "retriever",
             "web": "web",
-            "knowledge_agent": "knowledge_agent",
+            "tutor": "tutor",
         },
     )
 
-    # Retriever/Web → Knowledge Agent
-    builder.add_edge("retriever", "knowledge_agent")
-    builder.add_edge("web", "knowledge_agent")
+    # Web results are additional knowledge for the tutor.
+    builder.add_edge("web", "planner")
 
-    # Knowledge Agent → Planner → Tutor → END
-    builder.add_edge("knowledge_agent", "planner")
     builder.add_edge("planner", "tutor")
+
+    # Final tutor response ends the graph.
     builder.add_edge("tutor", END)
 
     return builder.compile()
 
 
+# Backward-compatible alias if other files still call build_planner_graph().
+def build_planner_graph():
+    return build_tutor_graph()
+
+
+# Optional cached graph helper for app/voice integrations.
+def get_tutor_graph():
+    return build_tutor_graph()
 
 

@@ -1,19 +1,29 @@
 """
 planner.py
 ----------
-Planner node.
+Planner node for the multi-agent Tutor Agent.
 
-Takes the synthesised knowledge and the student query and produces a
-step-by-step plan that the Tutor node will follow to answer the student.
+Role
+----
+The planner does NOT answer the student's question and does NOT create facts.
+It creates a short pedagogical strategy that tells the Tutor Agent how to teach
+through voice: tone, structure, explanation style, and follow-up style.
 
-On re-plan cycles (comprehension failed) the previous answer and
-comprehension feedback are included so the plan addresses the gaps.
+Expected state fields
+---------------------
+Input:
+    state.query
+
+Output:
+    state.Planner_info
+    state.planner_strategy
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from agent.llm import LLMClient
 from agent.models import PlannerConfig, TutorAgentState
@@ -21,53 +31,55 @@ from agent.models import PlannerConfig, TutorAgentState
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You decide HOW to teach.
+You are the Pedagogical Planner for a voice-based AI tutor for children.
 
-Possible modes:
-- story
-- analogy
-- example
-- hint
-- step_by_step
+Your job is to decide HOW the Tutor Agent should teach the student's query.
+You must not answer the query and you must not invent factual content.
 
-Return only 1-3 short bullet points.
+Create a short teaching strategy focused on:
+1. Tone and persona.
+2. Voice-friendly delivery style.
+3. Teaching structure.
+4. Best teaching mode: STORY, ANALOGY, HINT, STEP_BY_STEP, EXAMPLE, or SOCRATIC.
+5. A short comprehension check question the Tutor Agent can ask at the end.
 
-Do NOT write the answer.
-Maximum 50 words.
-
-Your job is to produce a clear, structured answer-plan that the Tutor
-agent will follow step-by-step.
-
-Rules
------
-1. Base the plan ENTIRELY on the SynthesisInfo provided.
-2. For simple queries, one step is sufficient.
-3. For complex queries, list explicit numbered steps.
-4. If a previous answer failed comprehension, address the specific
-   feedback in your plan (re-explain, add examples, simplify, etc.).
-5. Do NOT write the answer itself – only the plan.
+Rules:
+- Do NOT answer the student's question.
+- Do NOT include factual explanations of the topic.
+- Keep the plan useful for real-time voice tutoring.
+- Prefer simple words, short sentences, and child-friendly pacing.
+- Output maximum 4 short bullets.
 """
 
 
-def _build_user_message(state: TutorAgentState) -> str:
-    parts = [f"StudentQuery: {state.StudentQuery}"]
-    if state.SynthesisInfo:
-        parts.append(f"SynthesisInfo:\n{state.SynthesisInfo}")
-    if state.TutorAnswer and state.ComprehensionFeedback:
-        parts.append(f"PreviousAnswer:\n{state.TutorAnswer}")
-        parts.append(f"ComprehensionFeedback:\n{state.ComprehensionFeedback}")
-    return "\n\n".join(parts)
+def _get_state_value(state: TutorAgentState | dict[str, Any], key: str, default: Any = "") -> Any:
+    """Support both Pydantic state objects and plain dict state."""
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def _build_user_message(state: TutorAgentState | dict[str, Any]) -> str:
+    query = _get_state_value(state, "query", "")
+    if not query:
+        raise ValueError("PlannerNode requires state.query to be set.")
+
+    return f"Student query:\n{query}\n\nCreate the teaching strategy only."
 
 
 class PlannerNode:
     """LangGraph-compatible planner node."""
 
-    def __init__(self, api_key: str | None = None) -> None:
-        self._api_key = api_key or os.environ["OPENAI_API_KEY"]
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not self._api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set.")
+        self._model = model or os.getenv("PLANNER_MODEL", "gpt-5-mini")
 
-    def __call__(self, state: TutorAgentState) -> dict:
+    async def __call__(self, state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
         client = LLMClient(api_key=self._api_key)
-        response: PlannerConfig = client.generate_response(
+        response: PlannerConfig = await client.agenerate_response(
+            model=self._model,
             input=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_message(state)},
@@ -75,14 +87,21 @@ class PlannerNode:
             text_format=PlannerConfig,
         )
 
-        logger.info("PlannerNode: plan generated (%d chars).", len(response.plan))
-        if not response.plan:
+        plan = response.plan.strip()
+        if not plan:
             raise ValueError("PlannerNode returned an empty plan.")
 
-        return {"PlanInfo": response.plan}
+        logger.info("PlannerNode: strategy generated (%d chars).", len(plan))
+
+        # Match the current TutorAgentState field names.
+        # Planner_info is a readable copy; planner_strategy is what the orchestrator/tutor should use.
+        return {
+            "Planner_info": plan,
+            "planner_strategy": plan,
+        }
 
 
-# ── Module-level function alias ───────────────────────────────────────────────
+# Module-level function used by graph.py
 
-def planner_node(state: TutorAgentState) -> dict:
-    return PlannerNode()(state)
+async def planner_node(state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
+    return await PlannerNode()(state)

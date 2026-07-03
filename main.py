@@ -1,4 +1,6 @@
-from dotenv import load_dotenv
+import asyncio
+
+from dotenv import load_dotenv, main
 
 from livekit import agents
 from livekit.agents import (
@@ -41,7 +43,7 @@ server.setup_fnc = prewarm
 
 @server.rtc_session(agent_name="voice-tutor")
 async def my_agent(ctx: JobContext):
-    # ctx.log_context_fields = {"room": ctx.room.name}
+    ctx.log_context_fields = {"room": ctx.room.name}
     tutor_graph = build_tutor_graph()
     session = AgentSession(
         stt=openai.STT(
@@ -81,6 +83,30 @@ async def my_agent(ctx: JobContext):
         instructions="Greet the student and ask what topic they want help with."
     )
 
+async def test():
+    load_dotenv(".env.local")
 
+    from openai import OpenAI
+    from agent.graph import build_tutor_graph
+    import time
+
+    # Preload OpenAI resources before graph starts
+    preload_client = OpenAI()
+    _ = preload_client.responses
+    _ = preload_client.embeddings
+
+    print("Building tutor graph...")
+
+    agent = build_tutor_graph()
+
+    start_time = time.time()
+    result = await agent.ainvoke({
+        "query": "What is CO2? Explain it like I am 10 years old."
+    })
+    end_time = time.time()
+    print(f"Tutor graph built and executed in {end_time - start_time:.2f} seconds.")
+
+    print(result["TutorAnswer"])
 if __name__ == "__main__":
-    agents.cli.run_app(server)
+    # agents.cli.run_app(server)
+    asyncio.run(test()) 
