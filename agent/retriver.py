@@ -7,9 +7,14 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from langsmith import traceable
+from langchain.tools import tool
+import json
+import asyncio
+
 
 from openai import OpenAI
 from qdrant_client import QdrantClient
+
 
 
 
@@ -79,28 +84,44 @@ class QdrantRetriever(BaseRetriever):
             return ""
 
         return "\n\n---\n\n".join(docs)
+    
 
+@tool
+async def retrieve_knowledge(query: str) -> str:
+    """
+    Search the tutor's private knowledge base.
 
-# ── Node ──────────────────────────────────────────────────────────────────────
+    Use this tool when the student asks about uploaded documents,
+    course material, textbook content, or private tutor information.
 
-class RetrieverNode:
-    """LangGraph-compatible Qdrant retriever node."""
+    Do not use it when the question can be answered from the existing
+    conversation or from common general knowledge.
+    """
 
-    def __init__(self) -> None:
-        self._retriever = QdrantRetriever()
+    try:
+        # If retrieve() is synchronous, run it in a worker thread so that
+        # it does not block LiveKit's asyncio event loop.
+        retrieved = await asyncio.to_thread(
+            QdrantRetriever().retrieve,
+            query,
+        )
 
-    def __call__(self, state) -> dict:
-        retrieved = self._retriever.retrieve(state.query)
+        return json.dumps(
+            {
+                "status": "success",
+                "query": query,
+                "retrieved_info": retrieved,
+            },
+            default=str,
+        )
 
-        return {
-            "RetrievedInfo": retrieved,
-            "voice_status": "I found some information from my internal knowledge base."
-                if retrieved else "I could not find enough internal information."
+    except Exception as exc:
+        logger.exception("Knowledge retrieval failed")
 
-        }
-
-
-def retriever_node(state) -> dict:
-    return RetrieverNode()(state)
-
-
+        return json.dumps(
+            {
+                "status": "error",
+                "query": query,
+                "message": str(exc),
+            }
+        )

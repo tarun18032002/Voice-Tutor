@@ -14,11 +14,12 @@ import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
+import json
+import asyncio
+from langchain.tools import tool 
 
 from langsmith import traceable
 from tavily import TavilyClient
-
-from agent.models import TutorAgentState
 
 logger = logging.getLogger(__name__)
 
@@ -63,30 +64,47 @@ class WebSearchTool:
         return "\n\n---\n\n".join(parts)
 
 
-class WebSearchNode:
-    """LangGraph-compatible web search node."""
-
-    def __init__(self) -> None:
-        self._tool = WebSearchTool()
-
-    def __call__(self, state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
-        if isinstance(state, dict):
-            queries = state.get("search_queries") or [state.get("query", "")]
-        else:
-            queries = state.search_queries or [state.query]
-
-        queries = [q for q in queries if q]
-        if not queries:
-            raise ValueError("WebSearchNode requires at least one query.")
-
-        results = [self._tool.search(query) for query in queries[:3]]
-        web_info = "\n\n=== NEXT SEARCH RESULT SET ===\n\n".join(r for r in results if r)
-
-        return {
-            "WebSearch_info": web_info,
-            "voice_status": "I found some information from the web." if web_info else "I could not find any relevant information online."
-        }
+# ---------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------
 
 
-def websearch_node(state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
-    return WebSearchNode()(state)
+
+
+@tool
+async def web_search(query: str) -> str:
+    """
+    Search the public web.
+
+    Use this tool only when the student's question requires current,
+    recent, changing, or externally verified information.
+
+    Do not use web search for stable general-knowledge questions.
+    """
+
+    try:
+        # If search() is synchronous, keep it off the event loop.
+        results = await asyncio.to_thread(
+            WebSearchTool().search,
+            query,
+        )
+
+        return json.dumps(
+            {
+                "status": "success",
+                "query": query,
+                "web_search_results": results,
+            },
+            default=str,
+        )
+
+    except Exception as exc:
+        logger.exception("Web search failed")
+
+        return json.dumps(
+            {
+                "status": "error",
+                "query": query,
+                "message": str(exc),
+            }
+        )

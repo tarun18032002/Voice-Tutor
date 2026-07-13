@@ -1,109 +1,72 @@
-"""
-tutor.py
---------
-Tutor node.
+from langchain.messages import SystemMessage
 
-Generates the final child-friendly answer using:
-- student query
-- pedagogical planner strategy
-- internal retrieved knowledge
-- optional web search knowledge
-"""
-
-from __future__ import annotations
-
-import logging
-import os
-from typing import Any
-
-from langchain_core.messages import AIMessage
-
-from agent.llm import LLMClient
-from agent.models import TutorAgentState, TutorConfig
-
-logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT = """
-You are a friendly voice-based AI tutor for children.
-
-Your job:
-Explain the student's topic clearly, simply, and accurately.
-
-Rules:
-- Follow the planner strategy.
-- Use only the available knowledge and safe general knowledge.
-- Keep the answer concise and voice-friendly.
-- Use short sentences.
-- Avoid heavy jargon.
-- End with one simple comprehension-check question.
-- If the available knowledge is not enough, say what is missing instead of guessing.
-"""
+from agent.models import TutorState
+from agent.llm import model
+from agent.tutor import tools
 
 
-def _get_state_value(state: TutorAgentState | dict[str, Any], key: str, default: Any = "") -> Any:
-    if isinstance(state, dict):
-        return state.get(key, default)
-    return getattr(state, key, default)
 
 
-def _build_user_message(state: TutorAgentState | dict[str, Any]) -> str:
-    query = _get_state_value(state, "query", "")
-    planner_strategy = _get_state_value(state, "planner_strategy", "")
-    retrieved_info = _get_state_value(state, "Retriver_info", [])
-    web_info = _get_state_value(state, "WebSearch_info", "")
+TUTOR_SYSTEM_PROMPT = """
+You are a friendly AI tutor speaking to a student through a voice interface.
 
-    if isinstance(retrieved_info, list):
-        retrieved_text = "\n\n---\n\n".join(retrieved_info)
-    else:
-        retrieved_text = str(retrieved_info or "")
+Teaching style:
+- Explain concepts clearly and conversationally.
+- Use short sentences that sound natural when spoken.
+- Start with simple language.
+- Give one relatable example when helpful.
+- Avoid unnecessarily long lists.
+- Ask at most one short follow-up question.
 
-    return f"""Student query:
-{query}
+Tool rules:
 
-Planner strategy:
-{planner_strategy if planner_strategy else "No planner strategy provided."}
+1. Existing conversation
+Use information already available in the conversation.
+Do not retrieve the same information again for follow-up questions.
 
-Internal retrieved knowledge:
-{retrieved_text if retrieved_text else "No internal retrieved knowledge available."}
+2. General knowledge
+Answer stable general-knowledge questions directly.
+For example, definitions of CO2 or photosynthesis do not require tools.
 
-Web search knowledge:
-{web_info if web_info else "No web search knowledge available."}
+3. Private tutor content
+Use retrieve_knowledge when the student refers to uploaded documents,
+textbooks, lessons, chapters, notes, or private learning content.
 
-Now write the final tutor answer.
+4. Web search
+Use web_search only for recent, current, changing, or externally verified
+information.
+
+5. Tool results
+After receiving a tool result, explain the answer naturally.
+Do not mention tool names, graph nodes, JSON, internal routing, or agents.
+
+6. Voice output
+Do not use markdown tables.
+Do not read URLs aloud.
+Keep the initial answer concise and expand only when the student asks.
 """
 
 
-class TutorNode:
-    """LangGraph-compatible tutor answer node."""
-
-    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
-        self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not self._api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set.")
-        self._model = model or os.getenv("TUTOR_MODEL", "gpt-5-mini")
-
-    def __call__(self, state: TutorAgentState | dict[str, Any]) -> dict[str, Any]:
-        client = LLMClient(api_key=self._api_key)
-        response: TutorConfig = client.generate_response(
-            model=self._model,
-            input=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _build_user_message(state)},
-            ],
-            text_format=TutorConfig,
-        )
-
-        answer = response.answer.strip()
-        if not answer:
-            raise ValueError("TutorNode returned an empty answer.")
-
-        logger.info("TutorNode: answer generated (%d chars).", len(answer))
-
-        return {
-            "TutorAnswer": answer,
-            "messages": [AIMessage(content=answer)],
-        }
+# ---------------------------------------------------------------------
+# Tutor model
+# ---------------------------------------------------------------------
 
 
-def tutor_node(state: TutorAgentState | dict[str, Any]) -> dict[str, Any]:
-    return TutorNode()(state)
+model_with_tools = model.bind_tools(
+    tools,
+    parallel_tool_calls=True,
+)
+async def tutor_node(state: TutorState) -> dict:
+    """The only node that invokes an LLM."""
+    
+    response = await model_with_tools.ainvoke(
+        [
+            SystemMessage(content=TUTOR_SYSTEM_PROMPT),
+            *state["messages"],
+        ]
+    )
+
+    return {
+        "messages": [response],
+        "llm_calls": state.get("llm_calls", 0) + 1,
+    }

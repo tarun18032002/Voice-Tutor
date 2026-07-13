@@ -1,40 +1,89 @@
 """
 graph.py
 --------
-LangGraph graph assembly for the low-latency Tutor Agent.
+Single-LLM tutor graph for LiveKit.
 
-Architecture
-------------
+Flow
+----
 
 START
   ↓
 tutor
-  ├── no tools required → END
-  │
-  └── tools
+  ├── direct answer → END
+  └── tool calls
         ├── retrieve_knowledge
-        ├── search_web
-        └── create_learning_plan
+        └── web_search
               ↓
             tutor
               ↓
              END
-
-Only the tutor node calls an LLM.
-Retriever, planner, and web search are normal Python tools.
 """
 
-
 from __future__ import annotations
- 
 
-import inspect
+import json
 import logging
-from typing import Literal
+import os
 
-from langchain_core.messages import AIMessage
-from langgraph.graph import START,END, StateGraph
-from langgraph.prebuilt import ToolNode
-from langsmith import traceable 
+from dotenv import load_dotenv
 
-from agent.models import TutorAgentState,InputTutorAgentState
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
+import asyncio
+
+from agent.retriver import retrieve_knowledge
+from agent.websearch import web_search
+from agent.models import TutorState
+from agent.llm import model
+from agent.tutor import tutor_node
+
+
+
+load_dotenv(".env.local")
+
+logger = logging.getLogger(__name__)
+
+
+
+
+tools = [
+    retrieve_knowledge,
+    web_search,
+]
+
+
+
+
+# ---------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------
+
+def build_tutor_graph():
+    builder = StateGraph(TutorState)
+
+    builder.add_node("tutor", tutor_node)
+    builder.add_node("tools", ToolNode(tools))
+
+    builder.add_edge(START, "tutor")
+
+    builder.add_conditional_edges(
+        "tutor",
+        tools_condition,
+        {
+            "tools": "tools",
+            END: END,
+        },
+    )
+
+    builder.add_edge("tools", "tutor")
+
+    return builder.compile()
+
+
+# Build one reusable graph.
+tutor_graph = build_tutor_graph()
+
+
+def get_tutor_graph():
+    return tutor_graph
