@@ -134,12 +134,14 @@ class TutorAgentState(BaseModel):
 
     TutorAnswer: str = ""
 
+    voice_status: str = ""
+
 
 class OrchestratorConfig(BaseModel):
     reasoning: str = Field(
         description="Briefly explain what is missing, or why the current info is sufficient."
     )
-    action: Literal["SEARCH", "ANSWER"]
+    action: Literal["SEARCH", "ANSWER","TUTOR"]
     search_queries: list[str] = Field(
         default_factory=list,
         description="Only include if action is SEARCH. Provide 1-3 optimized search strings.",

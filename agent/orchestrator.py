@@ -27,18 +27,14 @@ def _build_context(state:TutorAgentState)->str:
         Build the context for the orchestrator node based on the current state of the tutor agent.
     """
     user_query = state.query 
-    retrieved_info,planner_strategy = None,None
+    retrieved_info = None
 
     if state.Retriver_info:
         retrieved_info = state.Retriver_info
-    if state.Planner_info :
-        planner_strategy = state.planner_strategy
 
     orchestrator_context = f"""Please evaluate the following context and decide on the next action.
 
     **User Query:** {user_query}
-
-    **Planner Strategy:** {planner_strategy}
 
     **Retrieved Information:** {retrieved_info}
 
@@ -62,15 +58,21 @@ def orchestrator_node(state: TutorAgentState) -> dict:
 
     print(f"Orchestrator decision: {response}")
 
-    if response.action not in ["SEARCH", "ANSWER"]:
+    if response.action not in ["SEARCH", "ANSWER","TUTOR"]:
         raise ValueError(
             f"Invalid response from orchestrator node. Expected SEARCH or ANSWER, got {response.action}"
         )
 
+
+    # orchestrator.py
     return {
         "Orchestartor_info": response.reasoning,
         "orchestrator_action": response.action,
         "search_queries": response.search_queries or [],
+        "voice_status": (
+            "The internal information is enough. I will explain it now."
+            if response.action == "ANSWER"
+            else "The internal information is not enough, so I am checking the web."
+        ),
     }
-
     

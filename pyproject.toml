@@ -28,4 +28,5 @@ dependencies = [
     "livekit-plugins-ai-coustics>=0.3.0",
     "langchain-core>=1.4.6",
     "langsmith>=0.8.15",
+    "ipython>=8.39.0",
 ]

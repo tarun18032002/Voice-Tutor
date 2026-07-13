@@ -94,8 +94,13 @@ class RetrieverNode:
 
         return {
             "RetrievedInfo": retrieved,
+            "voice_status": "I found some information from my internal knowledge base."
+                if retrieved else "I could not find enough internal information."
+
         }
 
 
 def retriever_node(state) -> dict:
     return RetrieverNode()(state)
+
+

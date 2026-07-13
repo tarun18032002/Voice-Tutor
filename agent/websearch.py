@@ -82,7 +82,10 @@ class WebSearchNode:
         results = [self._tool.search(query) for query in queries[:3]]
         web_info = "\n\n=== NEXT SEARCH RESULT SET ===\n\n".join(r for r in results if r)
 
-        return {"WebSearch_info": web_info}
+        return {
+            "WebSearch_info": web_info,
+            "voice_status": "I found some information from the web." if web_info else "I could not find any relevant information online."
+        }
 
 
 def websearch_node(state: TutorAgentState | dict[str, Any]) -> dict[str, str]:
