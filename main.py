@@ -1,14 +1,10 @@
-"""
-voice_agent.py
---------------
-LiveKit voice tutor backed by a LangGraph workflow.
-"""
+"""LiveKit voice tutor backed by the LangGraph workflow."""
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from dotenv import load_dotenv
 from livekit import agents
 from livekit.agents import (
     Agent,
@@ -20,110 +16,138 @@ from livekit.agents import (
     TurnHandlingOptions,
     room_io,
 )
-from livekit.plugins import (
-    ai_coustics,
-    langchain,
-    openai,
-    silero,
-)
+from livekit.plugins import ai_coustics, langchain, openai, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from agent.test import get_tutor_graph
+from agent.config import (
+    configure_logging,
+    get_settings,
+    validate_environment,
+)
+from agent.models import TutorRuntimeContext
 
-
-load_dotenv(".env.local")
-
+configure_logging()
+settings = get_settings()
 logger = logging.getLogger(__name__)
-
-
-ASSISTANT_INSTRUCTIONS = """
-You are a friendly AI tutor speaking with a student by voice.
-
-Explain concepts clearly.
-Keep responses concise, simple, and conversational.
-Use short sentences.
-Ask one short follow-up question when it supports learning.
-
-The underlying tutor workflow may use private learning material or web
-search when required. Never mention internal tools, graphs, agents, or
-routing decisions.
-"""
-
-
 server = AgentServer()
 
 
 def prewarm(proc: JobProcess) -> None:
-    """
-    Load expensive local resources once when the worker process starts.
-    """
+    """Validate configuration and initialize reusable worker resources."""
+
+    validate_environment(include_livekit=True)
+
+    # Importing here makes validation happen before graph/model/client startup.
+    from agent.graph import get_tutor_graph
+    from agent.retriver import get_retriever
+    from agent.websearch import get_web_search_client
 
     proc.userdata["vad"] = silero.VAD.load()
-
-    # The graph itself is already cached globally in agent.graph.
-    # Accessing it here ensures graph imports and clients are initialized
-    # before the first student turn.
     proc.userdata["tutor_graph"] = get_tutor_graph()
+
+    if settings.enable_retrieval:
+        proc.userdata["retriever"] = get_retriever()
+
+    if settings.enable_web_search:
+        proc.userdata["web_search"] = get_web_search_client()
+
+    logger.info("Voice Tutor worker prewarmed environment=%s", settings.app_env)
 
 
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="voice-tutor")
-async def my_agent(ctx: JobContext) -> None:
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
+def _build_audio_input_options() -> room_io.AudioInputOptions:
+    options: dict[str, Any] = {}
 
-    tutor_graph = ctx.proc.userdata["tutor_graph"]
+    if settings.enable_noise_cancellation:
+        options["noise_cancellation"] = ai_coustics.audio_enhancement(
+            model=ai_coustics.EnhancerModel.QUAIL_VF_S,
+        )
+
+    return room_io.AudioInputOptions(**options)
+
+
+def _stream_mode() -> str | list[str]:
+    if settings.enable_tool_status_messages:
+        return ["messages", "custom"]
+    return "messages"
+
+
+@server.rtc_session(agent_name=settings.livekit_agent_name)
+async def my_agent(ctx: JobContext) -> None:
+    """Create one isolated tutor session for a LiveKit room."""
+
+    room_id = ctx.room.name
+    ctx.log_context_fields = {"room": room_id}
+
+    runtime_context = TutorRuntimeContext(
+        room_id=room_id,
+        cache_ttl_seconds=settings.session_cache_ttl_seconds,
+        max_cache_entries=settings.session_cache_max_entries,
+    )
 
     graph_llm = langchain.LLMAdapter(
-        graph=tutor_graph,
-        stream_mode="messages",
+        graph=ctx.proc.userdata["tutor_graph"],
+        config={
+            "recursion_limit": settings.graph_recursion_limit,
+            "tags": ["voice-tutor", settings.app_env],
+            "metadata": {"room_id": room_id},
+        },
+        context=runtime_context,
+        stream_mode=_stream_mode(),
     )
 
     session = AgentSession(
-    stt=openai.STT(
-        model="gpt-4o-mini-transcribe",
-    ),
-    llm=langchain.LLMAdapter(
-        graph=tutor_graph,
-        stream_mode="messages",
-    ),
-    tts=openai.TTS(
-        model="gpt-4o-mini-tts",
-        voice="ash",
-        instructions=(
-            "Speak in a friendly, patient, and conversational tone."
-        ),
-    ),
-    vad=ctx.proc.userdata["vad"],
-    turn_handling=TurnHandlingOptions(
-            turn_detection=MultilingualModel(),
-            preemptive_generation=PreemptiveGenerationOptions(
-                enabled=True,
-                preemptive_tts=True,
+        stt=openai.STT(model=settings.stt_model),
+        llm=graph_llm,
+        tts=openai.TTS(
+            model=settings.tts_model,
+            voice=settings.tts_voice,
+            instructions=(
+                "Speak in a friendly, patient, clear, and conversational tone."
             ),
         ),
-)
+        vad=ctx.proc.userdata["vad"],
+        turn_handling=TurnHandlingOptions(
+            turn_detection=MultilingualModel(),
+            endpointing={
+                "mode": settings.endpointing_mode,
+                "min_delay": settings.endpointing_min_delay,
+                "max_delay": settings.endpointing_max_delay,
+            },
+            interruption={
+                "mode": settings.interruption_mode,
+                "min_duration": settings.interruption_min_duration,
+                "min_words": settings.interruption_min_words,
+                "resume_false_interruption": (
+                    settings.resume_false_interruption
+                ),
+            },
+            preemptive_generation=PreemptiveGenerationOptions(
+                enabled=settings.preemptive_generation_enabled,
+                preemptive_tts=settings.preemptive_tts_enabled,
+                max_speech_duration=(
+                    settings.preemptive_max_speech_duration
+                ),
+                max_retries=settings.preemptive_max_retries,
+            ),
+        ),
+    )
+
     await session.start(
         room=ctx.room,
-        agent=Agent(
-            instructions=ASSISTANT_INSTRUCTIONS,
-        ),
+        # The graph contains the single source of truth for tutor instructions.
+        agent=Agent(instructions=""),
         room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=ai_coustics.audio_enhancement(
-                    model=ai_coustics.EnhancerModel.QUAIL_VF_S,
-                ),
-            ),
+            audio_input=_build_audio_input_options(),
         ),
     )
 
     await session.generate_reply(
         instructions=(
-            "Greet the student briefly and ask what topic they would "
-            "like help with."
+            "Greet the student in one short sentence and ask what topic "
+            "they would like help with."
         )
     )
 

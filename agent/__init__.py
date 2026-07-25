@@ -1,11 +1,6 @@
-"""
-agent package.
+"""Voice Tutor agent package."""
 
-Contains all components used by the Voice Tutor LangGraph application.
-"""
-
-__version__ = "2.0.0"
+__version__ = "2.2.0"
 __author__ = "Voice Tutor Team"
 
-__all__ = []
-
+__all__ = ["__version__"]

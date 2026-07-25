@@ -1,72 +1,181 @@
-from langchain.messages import SystemMessage
+"""Tutor model node for the LangGraph workflow."""
 
-from agent.models import TutorState
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import time
+from typing import Any
+
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.runtime import Runtime
+
+from agent.config import get_settings
 from agent.llm import model
-from agent.tutor import tools
+from agent.models import TutorRuntimeContext, TutorState
+from agent.prompts import TUTOR_SYSTEM_PROMPT
+from agent.tools import TOOLS
 
+logger = logging.getLogger(__name__)
+settings = get_settings()
 
-
-
-TUTOR_SYSTEM_PROMPT = """
-You are a friendly AI tutor speaking to a student through a voice interface.
-
-Teaching style:
-- Explain concepts clearly and conversationally.
-- Use short sentences that sound natural when spoken.
-- Start with simple language.
-- Give one relatable example when helpful.
-- Avoid unnecessarily long lists.
-- Ask at most one short follow-up question.
-
-Tool rules:
-
-1. Existing conversation
-Use information already available in the conversation.
-Do not retrieve the same information again for follow-up questions.
-
-2. General knowledge
-Answer stable general-knowledge questions directly.
-For example, definitions of CO2 or photosynthesis do not require tools.
-
-3. Private tutor content
-Use retrieve_knowledge when the student refers to uploaded documents,
-textbooks, lessons, chapters, notes, or private learning content.
-
-4. Web search
-Use web_search only for recent, current, changing, or externally verified
-information.
-
-5. Tool results
-After receiving a tool result, explain the answer naturally.
-Do not mention tool names, graph nodes, JSON, internal routing, or agents.
-
-6. Voice output
-Do not use markdown tables.
-Do not read URLs aloud.
-Keep the initial answer concise and expand only when the student asks.
-"""
-
-
-# ---------------------------------------------------------------------
-# Tutor model
-# ---------------------------------------------------------------------
-
-
-model_with_tools = model.bind_tools(
-    tools,
-    parallel_tool_calls=True,
+model_with_tools = (
+    model.bind_tools(
+        TOOLS,
+        parallel_tool_calls=False,
+    )
+    if TOOLS
+    else model
 )
-async def tutor_node(state: TutorState) -> dict:
-    """The only node that invokes an LLM."""
-    
-    response = await model_with_tools.ainvoke(
-        [
-            SystemMessage(content=TUTOR_SYSTEM_PROMPT),
-            *state["messages"],
-        ]
+
+_FOLLOW_UP_PATTERN = re.compile(
+    r"\b(?:why|how|that|this|it|those|these|again|simpler|simple|"
+    r"example|another|more|continue|first|second|third|previous|"
+    r"mean|means|part|point|step|explain|repeat|understand)\b",
+    re.I,
+)
+
+
+def _has_output(response: Any) -> bool:
+    if getattr(response, "tool_calls", None):
+        return True
+
+    content = getattr(response, "content", None)
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return bool(content)
+
+    return content is not None
+
+
+def _latest_user_text(messages: list[Any]) -> str:
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            content = message.content
+        elif getattr(message, "type", None) == "human":
+            content = getattr(message, "content", "")
+        else:
+            continue
+
+        if isinstance(content, str):
+            return content.strip()
+        return str(content).strip()
+
+    return ""
+
+
+def _looks_like_follow_up(text: str) -> bool:
+    """Use a conservative heuristic to avoid injecting stale tool data."""
+
+    if not text:
+        return False
+
+    words = text.split()
+    if len(words) > 24:
+        return False
+
+    return bool(_FOLLOW_UP_PATTERN.search(text))
+
+
+def _build_model_messages(
+    state: TutorState,
+    runtime: Runtime[TutorRuntimeContext],
+) -> list[Any]:
+    messages: list[Any] = [SystemMessage(content=TUTOR_SYSTEM_PROMPT)]
+    user_text = _latest_user_text(state["messages"])
+
+    if _looks_like_follow_up(user_text):
+        reference_context = runtime.context.recent_reference_context(
+            settings.session_reference_context_chars
+        )
+
+        if reference_context:
+            messages.append(
+                SystemMessage(
+                    content=(
+                        "The following information was already fetched earlier "
+                        "in this same room. It may be unrelated to the new "
+                        "message. Use it only when the new message is clearly a "
+                        "follow-up to that topic. When it is sufficient, answer "
+                        "from it and do not call a tool again.\n\n"
+                        + reference_context
+                    )
+                )
+            )
+
+    messages.extend(state["messages"])
+    return messages
+
+
+async def tutor_node(
+    state: TutorState,
+    runtime: Runtime[TutorRuntimeContext],
+) -> dict[str, Any]:
+    """Invoke the only LLM used by the graph."""
+
+    started = time.perf_counter()
+    llm_calls = state.get("llm_calls", 0) + 1
+
+    try:
+        response = await asyncio.wait_for(
+            model_with_tools.ainvoke(
+                _build_model_messages(state, runtime)
+            ),
+            timeout=settings.llm_total_timeout_seconds,
+        )
+
+        if not _has_output(response):
+            logger.warning(
+                "Tutor model returned an empty response room=%s",
+                runtime.context.room_id,
+            )
+            response = AIMessage(
+                content=(
+                    "I could not finish that explanation. "
+                    "Please ask me the question one more time."
+                )
+            )
+
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Tutor model timed out room=%s",
+            runtime.context.room_id,
+        )
+        response = AIMessage(
+            content=(
+                "That explanation took too long to prepare. "
+                "Please ask me the question one more time."
+            )
+        )
+    except asyncio.CancelledError:
+        logger.info(
+            "Tutor model call cancelled room=%s",
+            runtime.context.room_id,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "Tutor model invocation failed room=%s",
+            runtime.context.room_id,
+        )
+        response = AIMessage(
+            content=(
+                "I had trouble preparing that explanation. "
+                "Please ask me the question one more time."
+            )
+        )
+
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    logger.info(
+        "Tutor model completed room=%s llm_call=%s duration_ms=%s",
+        runtime.context.room_id,
+        llm_calls,
+        duration_ms,
     )
 
     return {
         "messages": [response],
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "llm_calls": llm_calls,
     }

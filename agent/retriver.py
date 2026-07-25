@@ -1,57 +1,108 @@
-"""Retrieval module: Qdrant vector search + context fetch."""
+"""Qdrant retrieval and the private-knowledge LangChain tool.
+
+The filename intentionally remains ``retriver.py`` to preserve compatibility
+with the existing project imports. Rename it only as a separate cleanup.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from langsmith import traceable
-from langchain.tools import tool
-import json
-import asyncio
+from functools import lru_cache
+from typing import Any
 
-
+from langchain.tools import ToolRuntime, tool
+from langgraph.config import get_stream_writer
 from openai import OpenAI
 from qdrant_client import QdrantClient
 
-
-
+from agent.config import get_settings
+from agent.models import TutorRuntimeContext
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
-TOP_K = int(os.getenv("RETRIEVER_TOP_K", "5"))
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.split()).strip()[:500]
 
 
-# ── Abstract base ─────────────────────────────────────────────────────────────
+def _safe_text(value: Any, max_chars: int) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()[:max_chars]
+
+
+def _emit_status(message: str) -> None:
+    if not settings.enable_tool_status_messages:
+        return
+
+    try:
+        writer = get_stream_writer()
+        writer(message)
+    except Exception:
+        logger.debug("Unable to stream retrieval status", exc_info=True)
+
 
 class BaseRetriever(ABC):
+    """Interface for private-knowledge retrieval backends."""
+
     @abstractmethod
-    def retrieve(self, query: str, top_k: int = TOP_K) -> str:
-        """Return retrieved context as a single string."""
+    def retrieve(self, query: str) -> dict[str, Any]:
         raise NotImplementedError
 
 
-# ── Qdrant backend ────────────────────────────────────────────────────────────
-
-@dataclass
+@dataclass(slots=True)
 class QdrantRetriever(BaseRetriever):
-    url: str = field(default_factory=lambda: os.environ["QDRANT_URL"])
-    collection: str = field(default_factory=lambda: "documents")
-    api_key: str = field(default_factory=lambda: os.getenv("QDRANT_API_KEY", ""))
-    embed_model: str = field(default="text-embedding-3-small")
+    """Qdrant vector retriever using OpenAI embeddings."""
+
+    url: str = field(default_factory=lambda: settings.qdrant_url)
+    collection: str = field(
+        default_factory=lambda: settings.qdrant_collection
+    )
+    api_key: str = field(
+        default_factory=lambda: settings.qdrant_api_key,
+        repr=False,
+    )
+    text_field: str = field(
+        default_factory=lambda: settings.qdrant_text_field
+    )
+    embed_model: str = field(
+        default_factory=lambda: settings.embedding_model
+    )
+    top_k: int = field(default_factory=lambda: settings.retriever_top_k)
+    min_score: float = field(
+        default_factory=lambda: settings.retriever_min_score
+    )
+    max_context_chars: int = field(
+        default_factory=lambda: settings.retriever_max_context_chars
+    )
+    _client: QdrantClient = field(init=False, repr=False)
+    _openai: OpenAI = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.url:
+            raise ValueError("QDRANT_URL is not configured.")
+
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is not configured.")
+
         self._client = QdrantClient(
             url=self.url,
             api_key=self.api_key or None,
+            timeout=settings.qdrant_timeout_seconds,
         )
         self._openai = OpenAI(
-            api_key=os.environ["OPENAI_API_KEY"],
+            api_key=settings.openai_api_key,
+            timeout=settings.embedding_timeout_seconds,
+            max_retries=1,
         )
 
         logger.info(
-            "QdrantRetriever connected | collection=%s",
+            "Qdrant retriever initialized collection=%s",
             self.collection,
         )
 
@@ -60,68 +111,167 @@ class QdrantRetriever(BaseRetriever):
             input=text,
             model=self.embed_model,
         )
-
         return response.data[0].embedding
-    
-    @traceable(name="Qdrant Retrieval", run_type="retriever")
-    def retrieve(self, query: str, top_k: int = TOP_K) -> str:
-    
+
+    def retrieve(self, query: str) -> dict[str, Any]:
+        started = time.perf_counter()
         vector = self._embed(query)
 
-        results = self._client.query_points(
-            collection_name=self.collection,
-            query=vector,
-            limit=top_k,
-        ).points
+        query_kwargs: dict[str, Any] = {
+            "collection_name": self.collection,
+            "query": vector,
+            "limit": self.top_k,
+            "with_payload": True,
+        }
 
-        docs = [
-            hit.payload["text"]
-            for hit in results
-            if hit.payload and "text" in hit.payload
-        ]
+        # Zero means disabled. Let Qdrant apply threshold semantics for the
+        # collection's configured distance metric instead of comparing scores
+        # manually in application code.
+        if self.min_score != 0.0:
+            query_kwargs["score_threshold"] = self.min_score
 
-        if not docs:
-            return ""
+        response = self._client.query_points(**query_kwargs)
 
-        return "\n\n---\n\n".join(docs)
-    
+        chunks: list[dict[str, Any]] = []
+        seen_text: set[str] = set()
+        used_chars = 0
+
+        for hit in response.points:
+            payload = getattr(hit, "payload", None) or {}
+            text = _safe_text(
+                payload.get(self.text_field),
+                self.max_context_chars,
+            )
+
+            if not text or text in seen_text:
+                continue
+
+            remaining = self.max_context_chars - used_chars
+            if remaining <= 0:
+                break
+
+            text = text[:remaining]
+            seen_text.add(text)
+            used_chars += len(text)
+
+            score_value = getattr(hit, "score", None)
+            score = (
+                round(float(score_value), 6)
+                if isinstance(score_value, (int, float))
+                else None
+            )
+
+            title = _safe_text(
+                payload.get("title")
+                or payload.get("document_title")
+                or payload.get("file_name"),
+                200,
+            )
+            source = _safe_text(
+                payload.get("source")
+                or payload.get("document_id")
+                or payload.get("file_path"),
+                300,
+            )
+
+            chunks.append(
+                {
+                    "text": text,
+                    "score": score,
+                    "title": title,
+                    "source": source,
+                }
+            )
+
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        logger.info(
+            "Knowledge retrieval completed count=%s duration_ms=%s",
+            len(chunks),
+            duration_ms,
+        )
+
+        if not chunks:
+            return {
+                "status": "not_found",
+                "message": "No relevant private learning material was found.",
+                "query": query,
+                "chunks": [],
+            }
+
+        return {
+            "status": "success",
+            "query": query,
+            "chunks": chunks,
+        }
+
+
+@lru_cache(maxsize=1)
+def get_retriever() -> QdrantRetriever:
+    """Create the Qdrant and OpenAI clients once per worker process."""
+
+    return QdrantRetriever()
+
 
 @tool
-async def retrieve_knowledge(query: str) -> str:
-    """
-    Search the tutor's private knowledge base.
+async def retrieve_knowledge(
+    query: str,
+    runtime: ToolRuntime[TutorRuntimeContext],
+) -> dict[str, Any]:
+    """Search uploaded lessons, notes, textbooks, and private tutor content.
 
-    Use this tool when the student asks about uploaded documents,
-    course material, textbook content, or private tutor information.
-
-    Do not use it when the question can be answered from the existing
-    conversation or from common general knowledge.
+    Use this only for private learning material. Do not use it for stable
+    general knowledge or for an ordinary follow-up that can be answered from
+    the current conversation or previously fetched room context.
     """
+
+    clean_query = _normalize_query(query)
+    if not clean_query:
+        return {
+            "status": "error",
+            "message": "A non-empty private-knowledge query is required.",
+        }
+
+    context = runtime.context
+    cached = context.get_cached_result("retrieval", clean_query)
+    if cached is not None:
+        cached["cached"] = True
+        logger.info("Knowledge retrieval cache hit room=%s", context.room_id)
+        return cached
+
+    _emit_status("Let me check the lesson material.")
 
     try:
-        # If retrieve() is synchronous, run it in a worker thread so that
-        # it does not block LiveKit's asyncio event loop.
-        retrieved = await asyncio.to_thread(
-            QdrantRetriever().retrieve,
-            query,
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                get_retriever().retrieve,
+                clean_query,
+            ),
+            timeout=settings.retriever_timeout_seconds,
         )
-
-        return json.dumps(
-            {
-                "status": "success",
-                "query": query,
-                "retrieved_info": retrieved,
-            },
-            default=str,
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Knowledge retrieval timed out room=%s",
+            context.room_id,
         )
-
-    except Exception as exc:
-        logger.exception("Knowledge retrieval failed")
-
-        return json.dumps(
-            {
-                "status": "error",
-                "query": query,
-                "message": str(exc),
-            }
+        return {
+            "status": "timeout",
+            "message": "The private learning search timed out.",
+        }
+    except asyncio.CancelledError:
+        logger.info(
+            "Knowledge retrieval cancelled room=%s",
+            context.room_id,
         )
+        raise
+    except Exception:
+        logger.exception(
+            "Knowledge retrieval failed room=%s",
+            context.room_id,
+        )
+        return {
+            "status": "error",
+            "message": "The private learning search is unavailable right now.",
+        }
+
+    context.set_cached_result("retrieval", clean_query, result)
+    return result
