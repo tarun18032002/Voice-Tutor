@@ -28,10 +28,10 @@ from livekit.plugins import (
 )
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from agent.test import get_tutor_graph
-
-
 load_dotenv(".env.local")
+from agent.graph import get_tutor_graph
+
+
 
 logger = logging.getLogger(__name__)
 
